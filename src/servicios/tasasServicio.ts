@@ -43,8 +43,16 @@ export const obtenerTasaAUsd: ObtenerTasa = async (monedaOrigen) => {
     );
   }
 
+  // Tambien puede fallar al leer el cuerpo (no es JSON, o salta el timeout):
+  // es una falla del tercero, asi que corresponde 502 y no un 500.
+  let datos: unknown;
+  try {
+    datos = await respuesta.json();
+  } catch {
+    throw new ErrorApi(502, "La API de tipo de cambio devolvió una respuesta que no es JSON válido");
+  }
+
   // El JSON llega como `unknown`: hay que comprobar su forma antes de usarlo.
-  const datos: unknown = await respuesta.json();
   if (typeof datos !== "object" || datos === null) {
     throw new ErrorApi(502, "La API de tipo de cambio devolvió una respuesta inesperada");
   }

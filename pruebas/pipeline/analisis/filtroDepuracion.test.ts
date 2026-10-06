@@ -89,9 +89,34 @@ describe("FiltroDepuracion", () => {
   test.each([
     ["negativa", -1],
     ["un texto", "alta"],
-    ["null", null],
   ])("descarta un activo con volatilidad %s", async (_descripcion, volatilidad) => {
     expect((await depurar([{ ...valido, volatilidad }])).activos).toEqual([]);
+  });
+
+  test("una volatilidad null cuenta como no informada y el activo se conserva", async () => {
+    const resultado = await depurar([{ ...valido, volatilidad: null }]);
+
+    expect(resultado.activos).toHaveLength(1);
+    expect(resultado.activos[0]?.volatilidad).toBeUndefined();
+  });
+
+  test.each([
+    ["con caracteres no alfanuméricos", "BT-C"],
+    ["con etiquetas", "<script>"],
+    ["de más de 10 caracteres", "ABCDEFGHIJK"],
+  ])("descarta un activo con un símbolo %s, igual que la ingesta", async (_descripcion, simbolo) => {
+    expect((await depurar([{ ...valido, simbolo }])).activos).toEqual([]);
+  });
+
+  test("descarta un activo con un nombre de más de 50 caracteres", async () => {
+    expect((await depurar([{ ...valido, nombre: "x".repeat(51) }])).activos).toEqual([]);
+    expect((await depurar([{ ...valido, nombre: "x".repeat(50) }])).activos).toHaveLength(1);
+  });
+
+  test("descarta un activo cuyo monto desborda a infinito aunque cada factor sea finito", async () => {
+    const resultado = await depurar([{ ...valido, cantidad: 1e200, precioCompra: 1e200 }]);
+
+    expect(resultado.activos).toEqual([]);
   });
 
   test("un elemento malo no invalida al resto del lote", async () => {
@@ -123,14 +148,15 @@ describe("FiltroDepuracion", () => {
     const { lineas, registradorDe } = crearRegistroEnMemoria();
 
     await filtroDepuracion.ejecutar(
-      [valido, { ...valido, cantidad: 0 }, null],
+      [valido, { ...valido, cantidad: 0 }, null, { ...valido, simbolo: "BT-C" }],
       registradorDe(filtroDepuracion.nombre),
     );
 
     expect(lineas).toEqual([
       "[INFO] FiltroDepuracion: Descartado el elemento 1: cantidad debe ser mayor a 0",
       "[INFO] FiltroDepuracion: Descartado el elemento 2: no es un objeto",
-      "[INFO] FiltroDepuracion: 1 de 3 activos conservados",
+      "[INFO] FiltroDepuracion: Descartado el elemento 3: simbolo debe tener entre 1 y 10 caracteres alfanuméricos (ej: BTC)",
+      "[INFO] FiltroDepuracion: 1 de 4 activos conservados",
     ]);
   });
 });

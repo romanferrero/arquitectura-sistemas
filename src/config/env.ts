@@ -29,6 +29,16 @@ function numeroRequerido(nombre: string): number {
   return valor;
 }
 
+/** Igual que numeroRequerido pero admite el 0 (ej: un umbral "cualquier valor por encima de 0"). */
+function numeroNoNegativoRequerido(nombre: string): number {
+  const valor = Number(textoRequerido(nombre));
+  if (!Number.isFinite(valor) || valor < 0) {
+    console.error(`[config] La variable ${nombre} debe ser un número mayor o igual a 0.`);
+    process.exit(1);
+  }
+  return valor;
+}
+
 export const env = Object.freeze({
   PORT: numeroRequerido("PORT"),
   NODE_ENV: textoRequerido("NODE_ENV"),
@@ -36,6 +46,6 @@ export const env = Object.freeze({
   API_TASAS_URL: textoRequerido("API_TASAS_URL"),
   MONEDA: textoRequerido("MONEDA").toLowerCase(),
   TIMEOUT_MS: numeroRequerido("TIMEOUT_MS"),
-  UMBRAL_MONTO_USD: numeroRequerido("UMBRAL_MONTO_USD"),
-  UMBRAL_VOLATILIDAD: numeroRequerido("UMBRAL_VOLATILIDAD"),
+  UMBRAL_MONTO_USD: numeroNoNegativoRequerido("UMBRAL_MONTO_USD"),
+  UMBRAL_VOLATILIDAD: numeroNoNegativoRequerido("UMBRAL_VOLATILIDAD"),
 });

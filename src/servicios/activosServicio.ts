@@ -57,9 +57,13 @@ export async function crearActivo(cuerpo: unknown): Promise<Activo> {
 }
 
 export async function actualizarActivo(id: string, cuerpo: unknown): Promise<Activo> {
-  const actual = obtenerActivo(id); // lanza 404 si no existe
+  obtenerActivo(id); // 404 enseguida si no existe, sin gastar el pipeline
 
   const { datos } = await pipelineIngesta.ejecutar(cuerpo); // 400 / 502 si falla un filtro
+
+  // Se vuelve a leer: mientras el pipeline esperaba a la API de tasas el activo
+  // pudo borrarse o modificarse, y no hay que pisarlo con datos viejos.
+  const actual = obtenerActivo(id);
 
   // El simbolo puede cambiar, pero no puede pisar al de OTRO activo.
   const existente = repositorio.buscarPorSimbolo(datos.simbolo);

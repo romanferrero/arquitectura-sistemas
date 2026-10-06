@@ -231,3 +231,37 @@ verifica. Ahora el orden incorrecto falla al compilar.
 - Cierre de la Parte 3: `/code-review` sobre lo hecho y, con el OK del estudiante, merge de
   `develop` a `main` con el tag `parte-3`.
 - `tasasServicio` y `preciosServicio` siguen sin test unitario (importan `config/env.ts`).
+
+---
+
+## Cierre de la Parte 3 — Revisión de código · 2026-10-06
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el informado para la sesión 1).
+- **Modo:** revisión y correcciones, en `fix/revision-parte-3`.
+- **Skill usada:** `/code-review` en nivel *high*, sobre todo lo que `develop` tenía de más
+  que `main` (las sesiones 1 a 3 completas). Se ejecutó en un subproceso y devolvió 8
+  hallazgos, que se evaluaron uno por uno.
+
+**Hallazgos y decisión**
+
+| # | Hallazgo | Decisión |
+|---|---|---|
+| 1 | `respuesta.json()` fuera de `try`: una respuesta no-JSON de la API de tasas daba 500 en vez de 502 | **Corregido** en `tasasServicio` y también en `preciosServicio`, que tenía el mismo código desde antes de la Parte 3 |
+| 2 | `logger.error("…", { error })` perdía el mensaje y el stack (Winston no serializa un `Error`) | **Corregido.** Era una regresión mía de la sesión 1 |
+| 3 | `actualizarActivo` leía el activo antes del `await`: un DELETE concurrente dejaba al PUT responder 200 sobre algo que no se guardó | **Corregido**: se vuelve a leer después del pipeline (da 404 si se borró) |
+| 4 | Sin caché de tasas, y la consulta ocurre antes de comprobar el 409 | **No se corrige.** Ya figuraba como mejora; se agregó al README |
+| 5 | `volatilidad: null` descartaba el activo entero | **Corregido**: `null` cuenta como "no informada" |
+| 6 | El análisis no validaba el símbolo ni el largo del nombre como la ingesta | **Corregido**: reutiliza `validarSimbolo` y el límite de 50 caracteres |
+| 7 | `cantidad × precioCompra` podía desbordar a `Infinity` y salir como `null` en el JSON | **Corregido**: se descarta el activo |
+| 8 | Los umbrales de riesgo no admitían 0 | **Corregido**: admiten 0; los negativos siguen abortando el arranque |
+| 9 | Los fallos de validación (4xx) se loguean como `[ERROR]` | **No se corrige.** La letra pide registrar qué filtro falló; quedó como mejora en el README y en `RESPUESTAS-PARTE-3.md` |
+
+**Verificación**
+- Tests: 110 en verde (5 nuevos para las reglas de la depuración).
+- Reproducido a mano antes de dar por cerrados los que no tienen test unitario, con un
+  servidor falso de tasas: respuesta HTML → 502; `PUT` lento + `DELETE` → el PUT responde 404;
+  umbral en 0 → arranca y marca `high_risk`; umbral negativo → aborta; error inesperado →
+  el log trae mensaje y stack, tanto en formato de desarrollo como en JSON de producción.
+
+**Pendiente**
+- Con el OK del estudiante: merge de `develop` a `main` (`--no-ff`), tag `parte-3` y push.

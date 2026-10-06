@@ -1,3 +1,4 @@
+import { validarSimbolo } from "../../validaciones/activoValidacion.ts";
 import type { Filtro } from "../pipeline.ts";
 import type { ActivoAnalizable, LoteDepurado } from "./tipos.ts";
 
@@ -10,9 +11,13 @@ type Depurado = { conservado: true; activo: ActivoAnalizable } | { conservado: f
  * invalida a los demas. Cada descarte queda en el log con su indice y motivo.
  *
  * Que se descarta:
- *  - lo que no es un objeto, o no trae un simbolo de texto;
+ *  - lo que no es un objeto;
+ *  - un simbolo que no cumple la regla de la ingesta (texto alfanumerico de 1 a
+ *    10 caracteres) o un nombre de mas de 50 caracteres;
  *  - cantidad o precioCompra que no son numeros, o son cero o negativos;
- *  - una volatilidad informada que no es un numero >= 0.
+ *  - un monto (cantidad x precioCompra) tan grande que desborda a Infinity;
+ *  - una volatilidad informada que no es un numero >= 0. Un `null` cuenta como
+ *    "no informada": es como muchos clientes serializan un campo opcional vacio.
  *
  * Importante: se mira cada factor por separado. El monto (cantidad x precio)
  * de dos negativos da positivo, y ese activo igual seria invalido.
@@ -42,9 +47,21 @@ function depurar(elemento: unknown): Depurado {
   }
   const datos = elemento as Record<string, unknown>;
 
-  const simbolo = datos["simbolo"];
-  if (typeof simbolo !== "string" || simbolo.trim() === "") {
+  const simboloCrudo = datos["simbolo"];
+  if (typeof simboloCrudo !== "string") {
     return { conservado: false, motivo: "simbolo es obligatorio y debe ser un texto" };
+  }
+  const simbolo = validarSimbolo(simboloCrudo); // ya sale sin espacios y en mayusculas
+  if (simbolo === undefined) {
+    return {
+      conservado: false,
+      motivo: "simbolo debe tener entre 1 y 10 caracteres alfanuméricos (ej: BTC)",
+    };
+  }
+
+  const nombre = typeof datos["nombre"] === "string" ? datos["nombre"].trim() : undefined;
+  if (nombre !== undefined && nombre.length > 50) {
+    return { conservado: false, motivo: "nombre no puede superar los 50 caracteres" };
   }
 
   const cantidad = datos["cantidad"];
@@ -63,22 +80,19 @@ function depurar(elemento: unknown): Depurado {
     return { conservado: false, motivo: "precioCompra debe ser mayor a 0" };
   }
 
-  const volatilidad = datos["volatilidad"];
-  if (
-    volatilidad !== undefined &&
-    (typeof volatilidad !== "number" || !Number.isFinite(volatilidad) || volatilidad < 0)
-  ) {
-    return { conservado: false, motivo: "volatilidad debe ser un número mayor o igual a 0" };
+  // Dos factores finitos pueden dar un producto infinito (1e200 x 1e200).
+  if (!Number.isFinite(cantidad * precioCompra)) {
+    return { conservado: false, motivo: "el monto (cantidad x precioCompra) es demasiado grande" };
   }
 
-  return {
-    conservado: true,
-    activo: {
-      simbolo: simbolo.trim().toUpperCase(), // igual que en el resto de la API
-      nombre: typeof datos["nombre"] === "string" ? datos["nombre"].trim() : undefined,
-      cantidad,
-      precioCompra,
-      volatilidad,
-    },
-  };
+  const volatilidadCruda = datos["volatilidad"];
+  let volatilidad: number | undefined;
+  if (volatilidadCruda !== undefined && volatilidadCruda !== null) {
+    if (typeof volatilidadCruda !== "number" || !Number.isFinite(volatilidadCruda) || volatilidadCruda < 0) {
+      return { conservado: false, motivo: "volatilidad debe ser un número mayor o igual a 0" };
+    }
+    volatilidad = volatilidadCruda;
+  }
+
+  return { conservado: true, activo: { simbolo, nombre, cantidad, precioCompra, volatilidad } };
 }
