@@ -5,7 +5,7 @@
 - [x] Sesión 0 — Planificación
 - [x] Sesión 1 — Base del pipeline, logger y tests
 - [x] Sesión 2 — Pipeline de ingesta
-- [ ] Sesión 3 — Pipeline de análisis y cierre de la Parte 3
+- [x] Sesión 3 — Pipeline de análisis (falta el code-review y el merge a main)
 - [ ] Sesión 4 — Infraestructura de datos y migraciones
 - [ ] Sesión 5 — Repositorio de activos sobre MySQL
 - [ ] Sesión 6 — Auditoría en MongoDB

@@ -174,3 +174,60 @@ verifica. Ahora el orden incorrecto falla al compilar.
   mejora si se separa la configuración.
 - Requests de Postman para `moneda`: van en la sesión 3 junto con los del análisis.
 - Documentación completa del pipeline (estructura, logging, tests): sesión 3.
+
+---
+
+## Sesión 3 — Pipeline de análisis y cierre de la Parte 3 · 2026-10-06
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el informado para la sesión 1; no se
+  volvió a confirmar).
+- **Modo:** implementación, en `feature/sesion-3-pipeline-analisis`.
+- **Herramientas:** edición de archivos, pruebas de la API con `curl`, pruebas de mutación
+  a mano y **Newman** (vía `npx`, sin instalarlo en el proyecto) para correr la colección de
+  Postman. Sin skills ni subagentes hasta aquí; el `/code-review` va a continuación.
+
+**Qué se hizo**
+- [src/pipeline/analisis/](src/pipeline/analisis/): `FiltroDepuracion`,
+  `FiltroAnalisisRiesgo`, `FiltroFormato` y `pipelineAnalisis`. A diferencia de la ingesta,
+  cada filtro trabaja sobre el **lote** completo.
+- `POST /api/activos/analizar` con `analisisServicio`; recibe un array y no guarda nada.
+  La respuesta lleva `auditoria`, `resumen` y `activos`.
+- Variables nuevas `UMBRAL_MONTO_USD` (100000) y `UMBRAL_VOLATILIDAD` (80).
+- `src/utilidades/redondear.ts`: la función estaba duplicada en dos archivos y el filtro de
+  formato era el tercero; se unificó.
+- Postman: 5 requests nuevos (conversión de moneda y análisis), agregados solo con líneas
+  nuevas en el diff.
+- Documentación: README (pipelines, logging, tests, estructura, decisiones, endpoints) y
+  `RESPUESTAS-PARTE-3.md`. Se corrigieron dos afirmaciones del README que dejaron de ser
+  ciertas ("sin librería de validación" y "tests automatizados" como mejora pendiente).
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| El análisis **descarta** elementos inválidos en vez de rechazar el lote | Claude | La letra dice que el ScrubbingFilter "filtra"; un elemento malo no debe invalidar a los demás. Cada descarte queda en el log |
+| `high_risk` si el monto **supera** el umbral (estricto) o si la volatilidad lo supera | Claude | La letra dice "supera el umbral". Los motivos (`whale_alert`, `alta_volatilidad`) se informan por separado |
+| La volatilidad es un dato opcional que informa el cliente, en % | Claude | La letra no define de dónde sale; no hay datos históricos en la app |
+| Los umbrales son variables de entorno | Claude | Mismo criterio que el resto de la configuración (fail fast) |
+| **La `cantidad` no se redondea** | Claude, **a validar** | La letra dice "valores numéricos", pero a dos decimales `0.00345` BTC pasaría a ser `0`. Revertirlo es una línea en `filtroFormato.ts` |
+| Los metadatos de auditoría van a nivel respuesta (`idAnalisis`, fecha, filtros aplicados) | Claude | Es información del análisis completo, no de cada activo |
+| El símbolo se pasa a mayúsculas en la depuración | Claude | Consistencia con el resto de la API; se vio al probar con `"btc"` |
+| Rutas en español (`/api/activos/analizar`) en vez de `/assets/analyze` | Claude | Se mantiene la convención del proyecto |
+| Un solo `redondear` compartido | Claude | Estaba duplicado en dos archivos |
+
+**Verificación**
+- `npm run check`: sin errores. `npm run build`: sin errores.
+- `npm test`: 9 suites, 105 tests en verde.
+- Mutaciones (5): `>=` en lugar de `>` en monto, ídem en volatilidad, sin chequear
+  `cantidad <= 0`, sin redondear `precioCompra` y redondeando `cantidad`. Los 5 fueron
+  detectadas por los tests.
+- **Newman sobre la colección completa: 22 requests, 44 aserciones, 0 fallas.** Los 17
+  originales siguen pasando, o sea que el contrato de la API no cambió.
+- `curl`: lote mixto → 200 con 3 descartes y 2 `high_risk`; body que no es array → 400; array
+  vacío → 200 con resumen en cero; JSON roto → 400; `GET /analizar` → 404; el análisis no
+  agrega nada al portafolio.
+
+**Pendientes / a tener en cuenta**
+- Cierre de la Parte 3: `/code-review` sobre lo hecho y, con el OK del estudiante, merge de
+  `develop` a `main` con el tag `parte-3`.
+- `tasasServicio` y `preciosServicio` siguen sin test unitario (importan `config/env.ts`).

@@ -7,6 +7,7 @@ import { obtenerPrecio } from "./preciosServicio.ts";
 import { obtenerTasaAUsd } from "./tasasServicio.ts";
 import { env } from "../config/env.ts";
 import { registradorDe } from "../config/logger.ts";
+import { redondear } from "../utilidades/redondear.ts";
 
 /**
  * Reglas de negocio del CRUD. Esta capa no conoce `req` ni `res`.
@@ -108,8 +109,4 @@ export async function obtenerActivoConPrecio(id: string): Promise<ActivoConPreci
     variacionPorcentual: redondear((gananciaPerdida / costoTotal) * 100),
     consultadoEn: new Date().toISOString(),
   };
-}
-
-function redondear(valor: number): number {
-  return Math.round(valor * 100) / 100;
 }
