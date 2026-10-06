@@ -1,5 +1,6 @@
 import { ErrorApi } from "../../errores/ErrorApi.ts";
 import type { ObtenerTasa } from "../../servicios/tasasServicio.ts";
+import { redondear } from "../../utilidades/redondear.ts";
 import type { Filtro } from "../pipeline.ts";
 import type { ActivoIngestado, ActivoNormalizado } from "./tipos.ts";
 
@@ -50,8 +51,4 @@ export function crearFiltroConversionMoneda(dependencias: {
       };
     },
   };
-}
-
-function redondear(valor: number): number {
-  return Math.round(valor * 100) / 100;
 }
