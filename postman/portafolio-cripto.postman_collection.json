@@ -1,0 +1,388 @@
+{
+  "info": {
+    "name": "Portafolio Cripto - API REST",
+    "description": "Colección de pruebas de la API de portafolio de criptoactivos.\n\nSe puede ejecutar completa y en orden con el Collection Runner: el request 3 guarda el id del activo creado en la variable {{idActivo}} y los siguientes lo reutilizan.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "idActivo", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "01 - Health check",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/salud", "host": ["{{baseUrl}}"], "path": ["salud"] }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('200 OK', () => pm.response.to.have.status(200));"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Listar activos (vacio)",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/api/activos", "host": ["{{baseUrl}}"], "path": ["api", "activos"] }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('devuelve un array', () => pm.expect(pm.response.json()).to.be.an('array'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Crear activo BTC",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"simbolo\": \"BTC\",\n  \"nombre\": \"Bitcoin\",\n  \"cantidad\": 0.5,\n  \"precioCompra\": 40000\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/api/activos", "host": ["{{baseUrl}}"], "path": ["api", "activos"] }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 Created', () => pm.response.to.have.status(201));",
+              "pm.test('trae header Location', () => pm.response.to.have.header('Location'));",
+              "const activo = pm.response.json();",
+              "pm.test('genera un id', () => pm.expect(activo.id).to.be.a('string'));",
+              "pm.collectionVariables.set('idActivo', activo.id);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Crear activo ETH",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"simbolo\": \"ETH\",\n  \"nombre\": \"Ethereum\",\n  \"cantidad\": 3,\n  \"precioCompra\": 2000\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/api/activos", "host": ["{{baseUrl}}"], "path": ["api", "activos"] }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('201 Created', () => pm.response.to.have.status(201));"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - Listar activos (2 elementos)",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/api/activos", "host": ["{{baseUrl}}"], "path": ["api", "activos"] }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('hay 2 activos', () => pm.expect(pm.response.json()).to.have.lengthOf(2));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 - Filtrar por simbolo",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos?simbolo=ETH",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "activos"],
+          "query": [{ "key": "simbolo", "value": "ETH" }]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('solo ETH', () => pm.expect(pm.response.json()[0].simbolo).to.eql('ETH'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 - Obtener activo por id",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/{{idActivo}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "activos", "{{idActivo}}"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('200 OK', () => pm.response.to.have.status(200));"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 - Precio actual del activo",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/{{idActivo}}/precio",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "activos", "{{idActivo}}", "precio"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test('trae precioActual', () => pm.expect(r.precioActual).to.be.a('number'));",
+              "pm.test('valorActual = cantidad * precioActual', () => {",
+              "  pm.expect(r.valorActual).to.be.closeTo(r.cantidad * r.precioActual, 0.01);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 - Precio por simbolo",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/precios/BTC",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "precios", "BTC"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('trae precio', () => pm.expect(pm.response.json().precio).to.be.a('number'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 - Actualizar activo (PUT)",
+      "request": {
+        "method": "PUT",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"simbolo\": \"BTC\",\n  \"nombre\": \"Bitcoin\",\n  \"cantidad\": 1.25,\n  \"precioCompra\": 42000\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/{{idActivo}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "activos", "{{idActivo}}"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test('cantidad actualizada', () => pm.expect(r.cantidad).to.eql(1.25));",
+              "pm.test('el id no cambio', () => pm.expect(r.id).to.eql(pm.collectionVariables.get('idActivo')));",
+              "pm.test('actualizadoEn != creadoEn', () => pm.expect(r.actualizadoEn).to.not.eql(r.creadoEn));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 - Error 400: validacion",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"simbolo\": \"\",\n  \"cantidad\": -1\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/api/activos", "host": ["{{baseUrl}}"], "path": ["api", "activos"] }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+              "pm.test('lista todos los errores', () => {",
+              "  pm.expect(pm.response.json().error.detalles).to.be.an('array').with.length.above(1);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 - Error 400: JSON malformado",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{ esto no es json" },
+        "url": { "raw": "{{baseUrl}}/api/activos", "host": ["{{baseUrl}}"], "path": ["api", "activos"] }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('400 Bad Request', () => pm.response.to.have.status(400));"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "13 - Error 409: simbolo duplicado",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"simbolo\": \"ETH\",\n  \"nombre\": \"Ethereum duplicado\",\n  \"cantidad\": 1,\n  \"precioCompra\": 1000\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/api/activos", "host": ["{{baseUrl}}"], "path": ["api", "activos"] }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('409 Conflict', () => pm.response.to.have.status(409));"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "14 - Error 404: simbolo sin cotizacion",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/precios/NOEXISTE",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "precios", "NOEXISTE"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('404 Not Found', () => pm.response.to.have.status(404));"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "15 - Eliminar activo",
+      "request": {
+        "method": "DELETE",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/{{idActivo}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "activos", "{{idActivo}}"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('204 No Content', () => pm.response.to.have.status(204));",
+              "pm.test('sin cuerpo', () => pm.expect(pm.response.text()).to.be.empty);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "16 - Error 404: activo eliminado",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/{{idActivo}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "activos", "{{idActivo}}"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('404 Not Found', () => pm.response.to.have.status(404));"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "17 - Error 404: ruta inexistente",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/ruta-inexistente",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "ruta-inexistente"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('404 Not Found', () => pm.response.to.have.status(404));"]
+          }
+        }
+      ]
+    }
+  ]
+}

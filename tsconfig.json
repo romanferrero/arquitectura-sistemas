@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    /* Salida */
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "dist",
+    "sourceMap": true,
+
+    /* Chequeo estricto de tipos */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+
+    /* Claves para que Node ejecute los .ts directamente (type stripping):
+       - erasableSyntaxOnly: prohibe sintaxis que Node no puede borrar (enum, etc.)
+       - allowImportingTsExtensions + rewriteRelativeImportExtensions: escribimos
+         los imports con extension .ts y tsc los reescribe a .js al compilar
+       - verbatimModuleSyntax: obliga a usar "import type" para los tipos */
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "verbatimModuleSyntax": true,
+
+    /* Interoperabilidad */
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src"]
+}

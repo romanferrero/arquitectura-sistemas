@@ -1,0 +1,17 @@
+# Dependencias y build: se regeneran dentro del contenedor.
+# Ademas evita copiar binarios compilados para Windows a una imagen Linux.
+node_modules
+dist
+
+# Configuracion: NUNCA se hornea dentro de la imagen.
+# Se inyecta al ejecutar con: docker run --env-file .env
+.env
+
+# Archivos que no aportan nada a la imagen final.
+.git
+.gitignore
+postman
+*.md
+Dockerfile
+.dockerignore
+*.log

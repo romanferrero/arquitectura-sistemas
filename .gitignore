@@ -1,0 +1,7 @@
+node_modules
+dist
+.env
+*.log
+
+# Material del curso (letras y ejemplos del profesor): se usa en local, no se publica
+Contextos/

@@ -1,0 +1,30 @@
+{
+  "name": "portafolio-cripto",
+  "version": "1.0.0",
+  "description": "API REST para gestionar un portafolio de criptoactivos",
+  "type": "module",
+  "main": "dist/servidor.js",
+  "scripts": {
+    "dev": "node --env-file=.env --watch src/servidor.ts",
+    "build": "tsc",
+    "start": "node --env-file=.env dist/servidor.js",
+    "check": "tsc --noEmit"
+  },
+  "keywords": [
+    "api",
+    "rest",
+    "express",
+    "typescript",
+    "cripto"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.4.0",
+    "typescript": "^7.0.2"
+  }
+}
