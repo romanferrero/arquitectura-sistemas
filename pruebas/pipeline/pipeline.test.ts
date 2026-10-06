@@ -1,16 +1,7 @@
 import { describe, expect, test } from "@jest/globals";
 import { Pipeline } from "../../src/pipeline/pipeline.ts";
-import type { FabricaRegistrador, Filtro } from "../../src/pipeline/pipeline.ts";
-
-/** Registrador falso: guarda en memoria todo lo que se loguea. */
-function crearRegistroEnMemoria() {
-  const lineas: string[] = [];
-  const registradorDe: FabricaRegistrador = (origen) => ({
-    info: (mensaje) => lineas.push(`[INFO] ${origen}: ${mensaje}`),
-    error: (mensaje) => lineas.push(`[ERROR] ${origen}: ${mensaje}`),
-  });
-  return { lineas, registradorDe };
-}
+import type { Filtro } from "../../src/pipeline/pipeline.ts";
+import { crearRegistroEnMemoria } from "../ayudas/registro.ts";
 
 /** Filtro de prueba: agrega su marca al texto y anota que fue ejecutado. */
 function filtroQueMarca(nombre: string, ejecutados: string[]): Filtro<string, string> {
@@ -142,6 +133,16 @@ describe("Pipeline", () => {
 
     await expect(pipeline.ejecutar(" btc ")).resolves.toBe("BTC");
     expect(lineas[0]).toBe("[INFO] FiltroNormalizacion: Símbolo BTC normalizado");
+  });
+
+  test("el compilador rechaza un filtro cuya entrada no encaja con la salida anterior", () => {
+    const { registradorDe } = crearRegistroEnMemoria();
+    const duplicar: Filtro<number, number> = { nombre: "Duplicar", ejecutar: (n) => n * 2 };
+
+    // Este test se verifica con `npm run check`: si la linea de abajo compilara,
+    // el @ts-expect-error fallaria por no haber nada que esperar.
+    // @ts-expect-error la salida de Pipeline<string> es string y Duplicar espera number
+    Pipeline.crear<string>("incompatible", registradorDe).agregar(duplicar);
   });
 
   test("agregar() no modifica el pipeline original", () => {

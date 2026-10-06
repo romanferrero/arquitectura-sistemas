@@ -74,6 +74,7 @@ Se cargan con el flag **nativo** de Node `--env-file`, sin usar la librería `do
 | `PORT` | `3000` | Puerto de escucha |
 | `NODE_ENV` | `development` | Entorno de ejecución |
 | `API_PRECIOS_URL` | `https://api.coingecko.com/api/v3/simple/price` | Endpoint de CoinGecko |
+| `API_TASAS_URL` | `https://open.er-api.com/v6/latest` | Endpoint de tipo de cambio (se consulta como `<URL>/<MONEDA>`) |
 | `MONEDA` | `usd` | Moneda de las cotizaciones |
 | `TIMEOUT_MS` | `5000` | Timeout de la llamada externa |
 
@@ -89,8 +90,8 @@ Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 | GET | `/salud` | Health check | 200 | — |
 | GET | `/api/activos` | Lista los activos (`?simbolo=BTC` filtra) | 200 | — |
 | GET | `/api/activos/:id` | Obtiene un activo | 200 | 404 |
-| POST | `/api/activos` | Crea un activo | 201 | 400, 409 |
-| PUT | `/api/activos/:id` | Reemplaza un activo | 200 | 400, 404, 409 |
+| POST | `/api/activos` | Crea un activo | 201 | 400, 409, 502 |
+| PUT | `/api/activos/:id` | Reemplaza un activo | 200 | 400, 404, 409, 502 |
 | DELETE | `/api/activos/:id` | Elimina un activo | 204 | 404 |
 | GET | `/api/activos/:id/precio` | Activo + cotización + rendimiento | 200 | 404, 502 |
 | GET | `/api/precios/:simbolo` | Cotización de un símbolo suelto | 200 | 400, 404, 502 |
@@ -148,6 +149,12 @@ en el cuerpo, se ignora.
 | `nombre` | Texto no vacío, máximo 50 caracteres |
 | `cantidad` | Número mayor a 0 |
 | `precioCompra` | Número mayor a 0 |
+| `moneda` | Opcional. Código de 3 letras (`EUR`, `uyu`...); si falta se asume `USD` |
+
+Si `moneda` no es USD, el servidor consulta el tipo de cambio y **guarda `precioCompra`
+convertido a USD** con dos decimales: `{"precioCompra": 2000, "moneda": "EUR"}` se guarda
+como `2241.88`. El activo guardado no lleva el campo `moneda`. Una moneda inexistente da
+400; si la API de tipo de cambio no responde, 502.
 
 Se devuelven **todos** los errores de validación juntos, no solo el primero.
 Además, el **símbolo es único** dentro del portafolio: hay una sola posición por activo.

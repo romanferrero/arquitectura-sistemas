@@ -106,3 +106,71 @@ El plan completo está en [PLAN.md](PLAN.md).
   (`js-yaml` dentro de las herramientas de cobertura). No llegan a producción y no se
   corrigen sin forzar una versión mayor de Jest; se dejan como están.
 - La colección de Postman no se tocó (no cambió el contrato de la API).
+
+---
+
+## Sesión 2 — Pipeline de ingesta · 2026-10-06
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el informado para la sesión 1; no se
+  volvió a confirmar).
+- **Modo:** implementación, en `feature/sesion-2-pipeline-ingesta`.
+- **Herramientas:** edición de archivos, `npm install zod`, pruebas de la API real con
+  `curl` (incluida la API de tipo de cambio), pruebas de mutación a mano. Sin skills ni
+  subagentes.
+
+**Qué se hizo**
+- [src/pipeline/ingesta/](src/pipeline/ingesta/): tres filtros y el armado del pipeline.
+  - `filtroValidacion`: esquema **Zod** (v4). Solo valida, no transforma: `" btc "` sale
+    igual y lo limpia el filtro siguiente. Mantiene los mismos mensajes de error que la
+    validación manual anterior y los devuelve todos juntos.
+  - `filtroNormalizacion`: símbolo en mayúsculas y sin espacios, nombre sin espacios
+    repetidos, moneda en mayúsculas (default USD).
+  - `filtroConversionMoneda`: si la moneda no es USD, pide la tasa y convierte
+    `precioCompra` a USD con dos decimales. Es una fábrica que recibe `obtenerTasa`.
+  - `pipelineIngesta`: Validación → Normalización → Conversión. Recibe logger y tasa por
+    parámetro, así los tests arman el pipeline real sin red.
+- [src/servicios/tasasServicio.ts](src/servicios/tasasServicio.ts): adaptador de
+  `open.er-api.com` con el mismo molde que `preciosServicio` (fetch nativo, timeout, 502 si
+  falla el tercero). Variable nueva `API_TASAS_URL`.
+- `crearActivo` y `actualizarActivo` pasan por el pipeline y quedaron `async`; el
+  controlador solo sumó `async`/`await`. El orden de `actualizarActivo` se mantiene: primero
+  404 si el id no existe, después el pipeline.
+- `activoValidacion.ts` quedó solo con `validarSimbolo` (lo reutiliza el filtro de
+  validación y `GET /api/precios/:simbolo`).
+- Campo nuevo opcional `moneda` en POST y PUT. El activo guardado no lo lleva: el precio
+  se guarda siempre en USD.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| API de tasas: `open.er-api.com` | Claude | Gratuita, sin API key, soporta UYU; se verificó la respuesta real antes de escribir el adaptador |
+| Moneda inexistente → 400, API caída → 502 | Claude | Mismo criterio que precios: el error del cliente es 4xx, el del tercero es 502 |
+| Hay que mirar el cuerpo de la respuesta de tasas | Hallazgo | Para un código inválido la API responde HTTP 200 con `result: "error"` |
+| Precio convertido que redondea a 0 → 400 | Claude | Un activo con precio 0 no es válido; evita guardar basura con monedas de valor muy bajo |
+| El pipeline devuelve también `conversion` (moneda original, precio original, tasa) | Claude | La sesión 6 la va a guardar en el registro de auditoría |
+| El PUT pasa por el mismo pipeline que el POST | Claude (según el plan) | Mismas reglas de ingreso para crear y reemplazar |
+
+**Hallazgo y corrección (código de la sesión 1)**
+Una prueba de mutación (invertir el orden de dos filtros) mostró que el compilador **no**
+lo rechazaba, contra lo que decía el comentario de `pipeline.ts`: `Filtro.ejecutar` estaba
+declarado como método y TypeScript compara los métodos de forma bivariante. Se pasó a
+propiedad con tipo función y se agregó un test con `@ts-expect-error`, que `npm run check`
+verifica. Ahora el orden incorrecto falla al compilar.
+
+**Verificación**
+- `npm run check`: sin errores. `npm run build`: sin errores.
+- `npm test`: 5 suites, 54 tests en verde (53 de ingesta y runner + 1 de tipos).
+- Mutaciones: sin `toUpperCase` → 6 tests fallan; orden invertido → falla el compilador.
+- API real con `curl`: USD con texto sucio → 201 normalizado; EUR → 201 convertido con la
+  tasa real; moneda `XXX` → 400; body inválido → 400 con los 4 errores; símbolo repetido →
+  409; JSON roto → 400; PUT con UYU → 200 convertido; PUT de id inexistente → 404; DELETE →
+  204. Con la API de tasas apagada: EUR → 502 y USD → 201 (no la necesita).
+- Los logs salen una línea por filtro y, ante un error, cuál falló.
+
+**Pendientes / a tener en cuenta**
+- `tasasServicio` no tiene test unitario: importa `config/env.ts`, que corta el proceso si
+  faltan variables. Se verificó a mano contra la API real y con la API caída. Queda como
+  mejora si se separa la configuración.
+- Requests de Postman para `moneda`: van en la sesión 3 junto con los del análisis.
+- Documentación completa del pipeline (estructura, logging, tests): sesión 3.
