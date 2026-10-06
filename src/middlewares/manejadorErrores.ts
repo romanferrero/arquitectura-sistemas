@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { ErrorApi } from "../errores/ErrorApi.ts";
+import { logger } from "../config/logger.ts";
 
 /**
  * Se monta DESPUES de todas las rutas: si la request llego hasta aca es porque
@@ -41,6 +42,6 @@ export function manejadorErrores(
 
   // 3) Cualquier otra cosa: es un bug nuestro. Se loguea completo en el
   //    servidor pero al cliente solo le llega un mensaje generico.
-  console.error("[error] Error no controlado:", error);
+  logger.error("Error no controlado", { error });
   res.status(500).json({ error: { mensaje: "Error interno del servidor" } });
 }

@@ -1,0 +1,10 @@
+{
+  /* Solo para `npm run check`: tipa tambien los tests, que quedan fuera del
+     build (tsconfig.json compila unicamente src/ hacia dist/). */
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["src", "pruebas"]
+}
