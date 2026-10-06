@@ -21,7 +21,10 @@ export type FabricaRegistrador = (origen: string) => Registrador;
 
 export type Filtro<Entrada, Salida> = {
   nombre: string;
-  ejecutar(entrada: Entrada, registrador: Registrador): Salida | Promise<Salida>;
+  // Propiedad con tipo funcion y NO metodo (`ejecutar(...): ...`): TypeScript
+  // compara los metodos de forma bivariante, y entonces aceptaria un filtro que
+  // espera otra entrada. Como propiedad, el orden incorrecto no compila.
+  ejecutar: (entrada: Entrada, registrador: Registrador) => Salida | Promise<Salida>;
 };
 
 export class Pipeline<Entrada, Salida> {
