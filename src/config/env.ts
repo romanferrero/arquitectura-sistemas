@@ -36,4 +36,6 @@ export const env = Object.freeze({
   API_TASAS_URL: textoRequerido("API_TASAS_URL"),
   MONEDA: textoRequerido("MONEDA").toLowerCase(),
   TIMEOUT_MS: numeroRequerido("TIMEOUT_MS"),
+  UMBRAL_MONTO_USD: numeroRequerido("UMBRAL_MONTO_USD"),
+  UMBRAL_VOLATILIDAD: numeroRequerido("UMBRAL_VOLATILIDAD"),
 });
