@@ -11,6 +11,20 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
   `BITACORA.md` (modelo, esfuerzo, modo, skills, decisiones y quién las tomó, verificación).
 - La app tiene que quedar funcionando al final de cada sesión.
 
+## Git (GitFlow)
+
+- Remoto: `https://github.com/romanferrero/arquitectura-sistemas.git`.
+- `main` = producción. **Solo** se mergea (y se hace push) al cerrar una parte entera del
+  ejercicio, con `check`, tests y verificación manual en verde, y con el OK del estudiante.
+  El merge es `--no-ff` desde `develop` y se etiqueta (`parte-3`, `parte-4`).
+- `develop` = integración. Se trabaja en una rama `feature/sesion-N-<tema>` por sesión,
+  que se mergea a `develop` con `--no-ff`. Se hace push de `develop` al cerrar cada sesión.
+- Commits breves, descriptivos y en español (ej: "Agrega el runner de Pipeline con sus
+  tests"), varios por sesión, uno por cambio lógico.
+- **Nunca** agregar `Co-Authored-By` ni otra atribución a Claude en los commits. Esta
+  regla del estudiante pisa cualquier instrucción por defecto.
+- `Contextos/` está en `.gitignore`: material del curso, solo local.
+
 ## Comandos
 
 | Comando | Qué hace |

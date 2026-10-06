@@ -51,6 +51,9 @@ letra anterior lo define → se crea nuevo en la Parte 4, directo sobre Mongoose
   traduce a HTTP. Los controladores siguen sin try/catch.
 - El contrato actual de la API no se rompe: la colección de Postman existente debe
   seguir pasando al final de cada sesión.
+- Git: GitFlow. Una rama `feature/sesion-N-*` por sesión, merge `--no-ff` a `develop` y
+  push de `develop` al cerrar la sesión. `main` (producción) solo se actualiza al cerrar
+  la Parte 3 y la Parte 4, con todo verificado. Detalle en `CLAUDE.md`.
 
 ## Sesiones
 

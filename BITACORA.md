@@ -39,9 +39,9 @@ El plan completo está en [PLAN.md](PLAN.md).
 
 ## Sesión 1 — Base del pipeline, logger y tests · 2026-10-05
 
-- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo **sin informar** (Claude no puede verlo;
-  completar). El plan sugería Opus 5.5 · alto para esta sesión, pero la implementación
-  corrió en Sonnet 5.5.
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (dato que informó el estudiante al
+  cerrar la sesión). El plan sugería Opus 5.5 · alto para esta sesión, pero la
+  implementación corrió en Sonnet 5.5 (cambio con `/model`).
 - **Modo:** implementación.
 - **Herramientas:** edición de archivos, `npm install`, ejecución de `tsc` y Jest, prueba
   manual de la API compilada. Sin skills ni subagentes.
@@ -74,6 +74,20 @@ El plan completo está en [PLAN.md](PLAN.md).
 - El transformador de Jest usa una API de Node marcada como experimental. Se acepta
   porque se usa solo para tests; si cambia, el plan B es `@swc/jest`. *(Claude.)*
 
+**Control de versiones (GitFlow)**
+- Remoto: `https://github.com/romanferrero/arquitectura-sistemas.git` (estaba vacío).
+- La raíz del repo es `ejercicio2/` *(decisión del estudiante)*. `Contextos/` queda fuera
+  del repo (`.gitignore`): son letras y ejemplos del profesor y se usan solo en local
+  *(decisión de Claude, revertible quitando una línea de `.gitignore`)*.
+- `main` es producción y solo recibe merges al cerrar una parte completa y chequeada;
+  se trabaja en `develop` a través de ramas `feature/*`. *(Estudiante.)*
+- Commit base en `main`: el proyecto tal como estaba antes de la Parte 3. Como ya había
+  trabajo de esta sesión sin commitear, el baseline se armó en una copia temporal con los
+  archivos de la sesión revertidos, de modo que el historial muestre el cambio real.
+- Mensajes de commit breves y descriptivos, en español, **sin** `Co-Authored-By`
+  *(preferencia del estudiante)*.
+- `develop` se publica al cerrar cada sesión *(decisión del estudiante)*.
+
 **Verificación**
 - `npm run check`: sin errores.
 - `npm test`: 1 suite, 8 tests en verde (Node muestra dos advertencias de
@@ -87,6 +101,4 @@ El plan completo está en [PLAN.md](PLAN.md).
   de Winston. Tienen arreglo con `npm audit fix` pero no se aplicó sin consultar, porque
   modifica `package-lock.json`. Jest suma además ~20 avisos moderados solo de
   desarrollo. Decidir si se aplica el fix antes de cerrar la Parte 3.
-- El directorio no es un repositorio git. Pendiente que el estudiante decida si hacer
-  `git init` y un commit por sesión.
 - La colección de Postman no se tocó (no cambió el contrato de la API).
