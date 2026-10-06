@@ -96,9 +96,13 @@ El plan completo está en [PLAN.md](PLAN.md).
   `/salud` responde 200 y una ruta inexistente responde 404.
 
 **Pendientes / a tener en cuenta**
-- `npm audit --omit=dev` marca 2 vulnerabilidades en dependencias transitivas de
-  **Express** (`proxy-addr` crítica, `qs` moderada), anteriores a esta sesión; no vienen
-  de Winston. Tienen arreglo con `npm audit fix` pero no se aplicó sin consultar, porque
-  modifica `package-lock.json`. Jest suma además ~20 avisos moderados solo de
-  desarrollo. Decidir si se aplica el fix antes de cerrar la Parte 3.
+- **Resuelto** (rama `fix/dependencias-vulnerables`, aprobado por el estudiante):
+  `npm audit` marcaba 2 vulnerabilidades en dependencias transitivas de Express,
+  anteriores a esta sesión: `proxy-addr` (crítica, 2.0.7 → 2.0.8) y `qs` (moderada,
+  6.15.3 → 6.16.0). Solo cambió `package-lock.json`. Verificado: `npm audit --omit=dev`
+  da 0 vulnerabilidades; tipos, 8 tests, build y API (POST válido 201, JSON roto 400,
+  `?simbolo=` 200) siguen bien.
+- Quedan 19 avisos moderados **solo de desarrollo**, todos en la cadena de Jest
+  (`js-yaml` dentro de las herramientas de cobertura). No llegan a producción y no se
+  corrigen sin forzar una versión mayor de Jest; se dejan como están.
 - La colección de Postman no se tocó (no cambió el contrato de la API).
