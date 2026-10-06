@@ -111,8 +111,8 @@ El plan completo está en [PLAN.md](PLAN.md).
 
 ## Sesión 2 — Pipeline de ingesta · 2026-10-06
 
-- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el informado para la sesión 1; no se
-  volvió a confirmar).
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (confirmado por el estudiante al
+  cerrar la Parte 3).
 - **Modo:** implementación, en `feature/sesion-2-pipeline-ingesta`.
 - **Herramientas:** edición de archivos, `npm install zod`, pruebas de la API real con
   `curl` (incluida la API de tipo de cambio), pruebas de mutación a mano. Sin skills ni
@@ -179,8 +179,8 @@ verifica. Ahora el orden incorrecto falla al compilar.
 
 ## Sesión 3 — Pipeline de análisis y cierre de la Parte 3 · 2026-10-06
 
-- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el informado para la sesión 1; no se
-  volvió a confirmar).
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (confirmado por el estudiante al
+  cerrar la Parte 3).
 - **Modo:** implementación, en `feature/sesion-3-pipeline-analisis`.
 - **Herramientas:** edición de archivos, pruebas de la API con `curl`, pruebas de mutación
   a mano y **Newman** (vía `npx`, sin instalarlo en el proyecto) para correr la colección de
@@ -229,14 +229,14 @@ verifica. Ahora el orden incorrecto falla al compilar.
 
 **Pendientes / a tener en cuenta**
 - Cierre de la Parte 3: `/code-review` sobre lo hecho y, con el OK del estudiante, merge de
-  `develop` a `main` con el tag `parte-3`.
+  `develop` a `main`. *(Hecho: ver la entrada de cierre al final.)*
 - `tasasServicio` y `preciosServicio` siguen sin test unitario (importan `config/env.ts`).
 
 ---
 
 ## Cierre de la Parte 3 — Revisión de código · 2026-10-06
 
-- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el informado para la sesión 1).
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (confirmado por el estudiante).
 - **Modo:** revisión y correcciones, en `fix/revision-parte-3`.
 - **Skill usada:** `/code-review` en nivel *high*, sobre todo lo que `develop` tenía de más
   que `main` (las sesiones 1 a 3 completas). Se ejecutó en un subproceso y devolvió 8
@@ -264,4 +264,19 @@ verifica. Ahora el orden incorrecto falla al compilar.
   el log trae mensaje y stack, tanto en formato de desarrollo como en JSON de producción.
 
 **Pendiente**
-- Con el OK del estudiante: merge de `develop` a `main` (`--no-ff`), tag `parte-3` y push.
+- *(Hecho: ver la entrada de cierre al final.)*
+
+---
+
+## Parte 3 en `main` · 2026-10-06
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
+- **Qué se hizo:** merge de `develop` a `main` con `--no-ff` y push, con el OK del
+  estudiante. Se agregó como regla del repo (en `CLAUDE.md` y en la memoria de Claude) que
+  **no se usan tags**: el estudiante consideró que no hacían falta, así que el plan de
+  etiquetar `parte-3` y `parte-4` se descartó.
+- **Estado de la verificación al cerrar:** `npm run check` sin errores, 110 tests en verde y
+  Newman sobre la colección de Postman con 22 requests y 44 aserciones sin fallas.
+- **Siguiente:** sesión 4 (infraestructura de datos y migraciones), en una rama
+  `feature/sesion-4-*` desde `develop`. Docker Desktop estaba apagado en la planificación:
+  hay que prenderlo antes de empezar.

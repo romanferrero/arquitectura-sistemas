@@ -5,7 +5,7 @@
 - [x] Sesión 0 — Planificación
 - [x] Sesión 1 — Base del pipeline, logger y tests
 - [x] Sesión 2 — Pipeline de ingesta
-- [x] Sesión 3 — Pipeline de análisis y cierre de la Parte 3 (revisión hecha; falta el merge a `main`)
+- [x] Sesión 3 — Pipeline de análisis y cierre de la Parte 3 (**Parte 3 en `main`**)
 - [ ] Sesión 4 — Infraestructura de datos y migraciones
 - [ ] Sesión 5 — Repositorio de activos sobre MySQL
 - [ ] Sesión 6 — Auditoría en MongoDB
@@ -53,7 +53,7 @@ letra anterior lo define → se crea nuevo en la Parte 4, directo sobre Mongoose
   seguir pasando al final de cada sesión.
 - Git: GitFlow. Una rama `feature/sesion-N-*` por sesión, merge `--no-ff` a `develop` y
   push de `develop` al cerrar la sesión. `main` (producción) solo se actualiza al cerrar
-  la Parte 3 y la Parte 4, con todo verificado. Detalle en `CLAUDE.md`.
+  la Parte 3 y la Parte 4, con todo verificado y sin tags. Detalle en `CLAUDE.md`.
 
 ## Sesiones
 
