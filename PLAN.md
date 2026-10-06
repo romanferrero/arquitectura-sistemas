@@ -4,7 +4,7 @@
 
 - [x] Sesión 0 — Planificación
 - [x] Sesión 1 — Base del pipeline, logger y tests
-- [ ] Sesión 2 — Pipeline de ingesta
+- [x] Sesión 2 — Pipeline de ingesta
 - [ ] Sesión 3 — Pipeline de análisis y cierre de la Parte 3
 - [ ] Sesión 4 — Infraestructura de datos y migraciones
 - [ ] Sesión 5 — Repositorio de activos sobre MySQL
