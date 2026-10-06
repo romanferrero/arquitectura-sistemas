@@ -33,6 +33,7 @@ export const env = Object.freeze({
   PORT: numeroRequerido("PORT"),
   NODE_ENV: textoRequerido("NODE_ENV"),
   API_PRECIOS_URL: textoRequerido("API_PRECIOS_URL"),
+  API_TASAS_URL: textoRequerido("API_TASAS_URL"),
   MONEDA: textoRequerido("MONEDA").toLowerCase(),
   TIMEOUT_MS: numeroRequerido("TIMEOUT_MS"),
 });
