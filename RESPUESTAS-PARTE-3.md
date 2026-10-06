@@ -64,6 +64,8 @@ patrón que vive *dentro* de la capa de servicios: reemplaza la lógica lineal d
 - **Interfaces de puerto** para el logger y los adaptadores externos.
 - **Id de correlación** por request en los logs, para seguir una petición a través de los filtros.
 - **Filtros condicionales o en paralelo** si algún día hay pasos independientes entre sí.
+- **Loguear los 4xx como advertencia** y no como `[ERROR]`: hoy un body inválido genera la
+  misma línea que una falla real.
 - Separar la configuración para poder testear `tasasServicio` y `preciosServicio` sin
   depender de `process.env`.
 
@@ -98,6 +100,12 @@ patrón que vive *dentro* de la capa de servicios: reemplaza la lógica lineal d
 10. **Convertir un precio diminuto puede dar 0.** → Si el resultado redondeado es cero, 400.
 11. **Agregar requests a Postman sin reformatear toda la colección.** Reescribir el JSON
     tocaba 44 líneas existentes. → Inserción textual: solo líneas nuevas en el diff.
+12. **Lo que encontró la revisión de código final** (`/code-review`, nivel alto), ya corregido:
+    una respuesta no-JSON de la API de tasas daba 500 en vez de 502; el logger de errores
+    había perdido el mensaje y el stack; `PUT` podía responder 200 sobre un activo borrado
+    mientras esperaba la tasa; el análisis aceptaba símbolos que la ingesta rechaza;
+    `volatilidad: null` descartaba el activo; un monto podía desbordar a `Infinity`; y los
+    umbrales no admitían 0.
 
 ---
 

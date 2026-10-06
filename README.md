@@ -81,7 +81,7 @@ Se cargan con el flag **nativo** de Node `--env-file`, sin usar la librería `do
 | `API_TASAS_URL` | `https://open.er-api.com/v6/latest` | Endpoint de tipo de cambio (se consulta como `<URL>/<MONEDA>`) |
 | `MONEDA` | `usd` | Moneda de las cotizaciones |
 | `TIMEOUT_MS` | `5000` | Timeout de las llamadas externas |
-| `UMBRAL_MONTO_USD` | `100000` | Monto (en USD) que, superado, dispara la *Whale Alert* |
+| `UMBRAL_MONTO_USD` | `100000` | Monto (en USD) que, superado, dispara la *Whale Alert*. Admite 0 |
 | `UMBRAL_VOLATILIDAD` | `80` | Volatilidad (en %) que, superada, marca un activo como `high_risk` |
 
 Si falta alguna, la aplicación corta el arranque con un mensaje explícito
@@ -245,7 +245,7 @@ lote → FiltroDepuracion → FiltroAnalisisRiesgo → FiltroFormato → reporte
 
 | Filtro | Qué hace |
 |---|---|
-| `FiltroDepuracion` | Descarta lo que no se puede analizar: no es un objeto, sin símbolo, `cantidad` o `precioCompra` en cero, negativos o no numéricos, `volatilidad` inválida. Cada descarte se loguea con su índice y motivo |
+| `FiltroDepuracion` | Descarta lo que no se puede analizar: no es un objeto, símbolo inválido (mismas reglas que la ingesta), nombre de más de 50 caracteres, `cantidad` o `precioCompra` en cero, negativos o no numéricos, monto que desborda, `volatilidad` inválida (un `null` cuenta como no informada). Cada descarte se loguea con su índice y motivo |
 | `FiltroAnalisisRiesgo` | Marca `high_risk` si el monto (`cantidad × precioCompra`) **supera** `UMBRAL_MONTO_USD` (`whale_alert`) o si la `volatilidad` informada **supera** `UMBRAL_VOLATILIDAD` (`alta_volatilidad`) |
 | `FiltroFormato` | Redondea `monto`, `precioCompra` y `volatilidad` a dos decimales, agrega metadatos de auditoría y arma el resumen |
 
@@ -462,5 +462,9 @@ sin compilar en desarrollo y compilado en producción:
 - Resolver los símbolos vía `/coins/list` en vez del mapa fijo (se evitó porque descarga
   unas 15.000 monedas solo para traducir un identificador).
 - Persistencia real (siguiente etapa del ejercicio).
+- Caché de tasas de cambio: hoy cada alta en otra moneda consulta la API, y esa consulta
+  ocurre antes de comprobar si el símbolo ya existe (409).
+- Loguear los fallos del cliente (4xx) con un nivel menor que los del servidor: hoy un body
+  inválido deja una línea `[ERROR]` en el pipeline.
 - Test unitario de `tasasServicio` y `preciosServicio`: hoy importan `config/env.ts`, que
   corta el proceso si faltan variables; se verificaron contra las APIs reales.
