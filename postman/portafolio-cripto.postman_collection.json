@@ -383,6 +383,212 @@
           }
         }
       ]
+    },
+    {
+      "name": "18 - Crear activo en EUR (conversion a USD)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"simbolo\": \" ada \",\n  \"nombre\": \"  Cardano   \",\n  \"cantidad\": 1000,\n  \"precioCompra\": 100,\n  \"moneda\": \"eur\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/activos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 Created', () => pm.response.to.have.status(201));",
+              "const a = pm.response.json();",
+              "pm.test('simbolo normalizado', () => pm.expect(a.simbolo).to.eql('ADA'));",
+              "pm.test('nombre sin espacios sobrantes', () => pm.expect(a.nombre).to.eql('Cardano'));",
+              "pm.test('precio convertido a USD (distinto del original en EUR)', () => pm.expect(a.precioCompra).to.not.eql(100));",
+              "pm.test('no guarda el campo moneda', () => pm.expect(a).to.not.have.property('moneda'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "19 - Error 400: moneda inexistente",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"simbolo\": \"DOT\",\n  \"nombre\": \"Polkadot\",\n  \"cantidad\": 1,\n  \"precioCompra\": 10,\n  \"moneda\": \"XXX\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/activos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "20 - Analizar lote mixto",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "[\n  {\n    \"simbolo\": \"btc\",\n    \"nombre\": \"Bitcoin\",\n    \"cantidad\": 10,\n    \"precioCompra\": 50000.456\n  },\n  {\n    \"simbolo\": \"ETH\",\n    \"nombre\": \"Ethereum\",\n    \"cantidad\": 3,\n    \"precioCompra\": 2000\n  },\n  {\n    \"simbolo\": \"SOL\",\n    \"cantidad\": 1,\n    \"precioCompra\": 100,\n    \"volatilidad\": 90.456\n  },\n  {\n    \"simbolo\": \"ADA\",\n    \"cantidad\": 0,\n    \"precioCompra\": 1\n  },\n  null\n]"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/analizar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos",
+            "analizar"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test('resumen del lote', () => pm.expect(r.resumen).to.eql({ recibidos: 5, descartados: 2, analizados: 3, altoRiesgo: 2 }));",
+              "pm.test('BTC es high_risk por whale_alert', () => {",
+              "  const btc = r.activos.find(a => a.simbolo === 'BTC');",
+              "  pm.expect(btc.riesgo).to.eql('high_risk');",
+              "  pm.expect(btc.motivosRiesgo).to.eql(['whale_alert']);",
+              "});",
+              "pm.test('valores redondeados a 2 decimales', () => pm.expect(r.activos[0].precioCompra).to.eql(50000.46));",
+              "pm.test('trae metadatos de auditoria', () => {",
+              "  pm.expect(r.auditoria.idAnalisis).to.be.a('string');",
+              "  pm.expect(r.auditoria.filtrosAplicados).to.eql(['FiltroDepuracion', 'FiltroAnalisisRiesgo', 'FiltroFormato']);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "21 - Analizar array vacio",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "[]"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/analizar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos",
+            "analizar"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('resumen en cero', () => pm.expect(pm.response.json().resumen.analizados).to.eql(0));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "22 - Error 400: analizar sin un array",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"simbolo\": \"BTC\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/analizar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos",
+            "analizar"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
     }
   ]
 }

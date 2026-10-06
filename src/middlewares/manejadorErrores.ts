@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { ErrorApi } from "../errores/ErrorApi.ts";
+import { logger } from "../config/logger.ts";
 
 /**
  * Se monta DESPUES de todas las rutas: si la request llego hasta aca es porque
@@ -41,6 +42,9 @@ export function manejadorErrores(
 
   // 3) Cualquier otra cosa: es un bug nuestro. Se loguea completo en el
   //    servidor pero al cliente solo le llega un mensaje generico.
-  console.error("[error] Error no controlado:", error);
+  // Se arma el texto a mano: un Error no es serializable por Winston (sus
+  // propiedades no son enumerables) y el log perderia el mensaje y el stack.
+  const detalle = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  logger.error(`Error no controlado: ${detalle}`);
   res.status(500).json({ error: { mensaje: "Error interno del servidor" } });
 }

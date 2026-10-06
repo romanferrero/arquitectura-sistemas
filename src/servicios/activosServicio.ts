@@ -2,9 +2,12 @@ import { randomUUID } from "node:crypto";
 import * as repositorio from "../datos/activosRepositorio.ts";
 import { ErrorApi } from "../errores/ErrorApi.ts";
 import type { Activo, ActivoConPrecio } from "../modelos/activo.ts";
-import { validarDatosActivo } from "../validaciones/activoValidacion.ts";
+import { crearPipelineIngesta } from "../pipeline/ingesta/pipelineIngesta.ts";
 import { obtenerPrecio } from "./preciosServicio.ts";
+import { obtenerTasaAUsd } from "./tasasServicio.ts";
 import { env } from "../config/env.ts";
+import { registradorDe } from "../config/logger.ts";
+import { redondear } from "../utilidades/redondear.ts";
 
 /**
  * Reglas de negocio del CRUD. Esta capa no conoce `req` ni `res`.
@@ -13,6 +16,10 @@ import { env } from "../config/env.ts";
  * `undefined` cuando no encuentra algo y el servicio es quien decide que eso
  * es un 404 lanzando un ErrorApi.
  */
+
+// Validacion, normalizacion y conversion de moneda: todo lo que le pasa a un
+// activo antes de guardarse. Aca se le conectan el logger y la API de tasas.
+const pipelineIngesta = crearPipelineIngesta({ registradorDe, obtenerTasa: obtenerTasaAUsd });
 
 export function listarActivos(simbolo?: string): Activo[] {
   const activos = repositorio.listar();
@@ -30,50 +37,43 @@ export function obtenerActivo(id: string): Activo {
   return activo;
 }
 
-export function crearActivo(cuerpo: unknown): Activo {
-  const resultado = validarDatosActivo(cuerpo);
-  if (!resultado.valido) {
-    throw new ErrorApi(400, "Datos del activo inválidos", resultado.errores);
-  }
+// Es async porque el pipeline puede consultar la API de tasas de cambio.
+export async function crearActivo(cuerpo: unknown): Promise<Activo> {
+  const { datos } = await pipelineIngesta.ejecutar(cuerpo); // 400 / 502 si falla un filtro
 
   // Regla de negocio: una sola posicion por simbolo en el portafolio.
-  const existente = repositorio.buscarPorSimbolo(resultado.datos.simbolo);
+  const existente = repositorio.buscarPorSimbolo(datos.simbolo);
   if (existente !== undefined) {
-    throw new ErrorApi(
-      409,
-      `Ya existe un activo con el símbolo ${resultado.datos.simbolo}`,
-    );
+    throw new ErrorApi(409, `Ya existe un activo con el símbolo ${datos.simbolo}`);
   }
 
   const ahora = new Date().toISOString();
   return repositorio.guardar({
     id: randomUUID(),
-    ...resultado.datos,
+    ...datos,
     creadoEn: ahora,
     actualizadoEn: ahora,
   });
 }
 
-export function actualizarActivo(id: string, cuerpo: unknown): Activo {
-  const actual = obtenerActivo(id); // lanza 404 si no existe
+export async function actualizarActivo(id: string, cuerpo: unknown): Promise<Activo> {
+  obtenerActivo(id); // 404 enseguida si no existe, sin gastar el pipeline
 
-  const resultado = validarDatosActivo(cuerpo);
-  if (!resultado.valido) {
-    throw new ErrorApi(400, "Datos del activo inválidos", resultado.errores);
-  }
+  const { datos } = await pipelineIngesta.ejecutar(cuerpo); // 400 / 502 si falla un filtro
+
+  // Se vuelve a leer: mientras el pipeline esperaba a la API de tasas el activo
+  // pudo borrarse o modificarse, y no hay que pisarlo con datos viejos.
+  const actual = obtenerActivo(id);
 
   // El simbolo puede cambiar, pero no puede pisar al de OTRO activo.
-  const existente = repositorio.buscarPorSimbolo(resultado.datos.simbolo);
+  const existente = repositorio.buscarPorSimbolo(datos.simbolo);
   if (existente !== undefined && existente.id !== id) {
-    throw new ErrorApi(
-      409,
-      `Ya existe otro activo con el símbolo ${resultado.datos.simbolo}`,
-    );
+    throw new ErrorApi(409, `Ya existe otro activo con el símbolo ${datos.simbolo}`);
   }
 
   const actualizado: Activo = {
     id: actual.id, // el id nunca cambia, aunque venga en el body
-    ...resultado.datos,
+    ...datos,
     creadoEn: actual.creadoEn, // la fecha de alta se conserva
     actualizadoEn: new Date().toISOString(),
   };
@@ -113,8 +113,4 @@ export async function obtenerActivoConPrecio(id: string): Promise<ActivoConPreci
     variacionPorcentual: redondear((gananciaPerdida / costoTotal) * 100),
     consultadoEn: new Date().toISOString(),
   };
-}
-
-function redondear(valor: number): number {
-  return Math.round(valor * 100) / 100;
 }

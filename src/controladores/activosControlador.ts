@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import * as servicio from "../servicios/activosServicio.ts";
+import { analizarActivos } from "../servicios/analisisServicio.ts";
 import { obtenerPrecio } from "../servicios/preciosServicio.ts";
 import { ErrorApi } from "../errores/ErrorApi.ts";
 import { validarSimbolo } from "../validaciones/activoValidacion.ts";
@@ -28,20 +29,25 @@ export function obtener(req: Request<{ id: string }>, res: Response): void {
 }
 
 // POST /api/activos
-export function crear(req: Request, res: Response): void {
-  const activo = servicio.crearActivo(req.body);
+export async function crear(req: Request, res: Response): Promise<void> {
+  const activo = await servicio.crearActivo(req.body);
   res.status(201).location(`/api/activos/${activo.id}`).json(activo);
 }
 
 // PUT /api/activos/:id
-export function actualizar(req: Request<{ id: string }>, res: Response): void {
-  res.status(200).json(servicio.actualizarActivo(req.params.id, req.body));
+export async function actualizar(req: Request<{ id: string }>, res: Response): Promise<void> {
+  res.status(200).json(await servicio.actualizarActivo(req.params.id, req.body));
 }
 
 // DELETE /api/activos/:id
 export function eliminar(req: Request<{ id: string }>, res: Response): void {
   servicio.eliminarActivo(req.params.id);
   res.status(204).send(); // 204 no lleva cuerpo
+}
+
+// POST /api/activos/analizar  (recibe un array; no guarda nada)
+export async function analizar(req: Request, res: Response): Promise<void> {
+  res.status(200).json(await analizarActivos(req.body));
 }
 
 // GET /api/activos/:id/precio

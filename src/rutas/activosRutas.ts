@@ -9,6 +9,7 @@ export const activosRutas = Router();
 
 activosRutas.get("/activos", controlador.listar);
 activosRutas.post("/activos", controlador.crear);
+activosRutas.post("/activos/analizar", controlador.analizar);
 
 // Esta ruta va antes que "/activos/:id" por claridad; Express igual las
 // distingue porque tienen distinta cantidad de segmentos.
