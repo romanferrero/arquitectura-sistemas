@@ -1,9 +1,11 @@
 # API REST — Portafolio de Criptoactivos
 
 API REST para gestionar un portafolio de criptoactivos, con CRUD completo sobre
-almacenamiento en memoria e integración con una API externa de cotizaciones.
+almacenamiento en memoria, integración con APIs externas (cotizaciones y tipo de cambio)
+y procesamiento con el patrón **Pipes & Filters**: un pipeline de ingesta para los activos
+nuevos y otro de análisis de riesgo para lotes.
 
-**Stack:** Node.js · Express 5 · TypeScript · Docker
+**Stack:** Node.js · Express 5 · TypeScript · Zod · Winston · Jest · Docker
 
 ---
 
@@ -31,7 +33,8 @@ cp .env.example .env      # en Windows: copy .env.example .env
 | `npm run dev` | Levanta la API en modo desarrollo con recarga automática |
 | `npm run build` | Compila TypeScript a JavaScript en `dist/` |
 | `npm start` | Ejecuta la versión compilada |
-| `npm run check` | Verifica los tipos sin generar archivos |
+| `npm run check` | Verifica los tipos de `src/` y `pruebas/` sin generar archivos |
+| `npm test` | Corre los tests con Jest |
 
 Los comandos son, en realidad:
 
@@ -39,6 +42,7 @@ Los comandos son, en realidad:
 node --env-file=.env --watch src/servidor.ts    # dev
 tsc                                             # build
 node --env-file=.env dist/servidor.js           # start
+node --experimental-vm-modules node_modules/jest/bin/jest.js   # test
 ```
 
 La API queda disponible en `http://localhost:3000`.
@@ -76,7 +80,9 @@ Se cargan con el flag **nativo** de Node `--env-file`, sin usar la librería `do
 | `API_PRECIOS_URL` | `https://api.coingecko.com/api/v3/simple/price` | Endpoint de CoinGecko |
 | `API_TASAS_URL` | `https://open.er-api.com/v6/latest` | Endpoint de tipo de cambio (se consulta como `<URL>/<MONEDA>`) |
 | `MONEDA` | `usd` | Moneda de las cotizaciones |
-| `TIMEOUT_MS` | `5000` | Timeout de la llamada externa |
+| `TIMEOUT_MS` | `5000` | Timeout de las llamadas externas |
+| `UMBRAL_MONTO_USD` | `100000` | Monto (en USD) que, superado, dispara la *Whale Alert* |
+| `UMBRAL_VOLATILIDAD` | `80` | Volatilidad (en %) que, superada, marca un activo como `high_risk` |
 
 Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 (*fail fast*, ver [`src/config/env.ts`](src/config/env.ts)).
@@ -93,6 +99,7 @@ Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 | POST | `/api/activos` | Crea un activo | 201 | 400, 409, 502 |
 | PUT | `/api/activos/:id` | Reemplaza un activo | 200 | 400, 404, 409, 502 |
 | DELETE | `/api/activos/:id` | Elimina un activo | 204 | 404 |
+| POST | `/api/activos/analizar` | Analiza un lote de activos (no guarda nada) | 200 | 400 |
 | GET | `/api/activos/:id/precio` | Activo + cotización + rendimiento | 200 | 404, 502 |
 | GET | `/api/precios/:simbolo` | Cotización de un símbolo suelto | 200 | 400, 404, 502 |
 
@@ -200,23 +207,135 @@ La llamada se hace con el `fetch` **nativo** de Node (sin `axios`) y un timeout 
 
 ---
 
+## Pipelines (Pipes & Filters)
+
+Un **filtro** hace una sola operación sobre el dato; un **pipeline** encadena filtros y los
+ejecuta en orden pasando la salida de uno como entrada del siguiente. Si un filtro falla,
+el pipeline corta ahí (*fail fast*) y los siguientes no se ejecutan. El runner genérico es
+[`src/pipeline/pipeline.ts`](src/pipeline/pipeline.ts) y es **inmutable y tipado**: el
+compilador rechaza un orden de filtros incompatible.
+
+### Ingesta — `POST` y `PUT /api/activos`
+
+```
+body → FiltroValidacion → FiltroNormalizacion → FiltroConversionMoneda → guardar
+```
+
+| Filtro | Qué hace |
+|---|---|
+| `FiltroValidacion` | Comprueba la estructura con **Zod**. Solo valida, no transforma. Devuelve todos los errores juntos (400) |
+| `FiltroNormalizacion` | Símbolo en mayúsculas y sin espacios; nombre sin espacios sobrantes; moneda en mayúsculas (default `USD`) |
+| `FiltroConversionMoneda` | Si la moneda no es USD, consulta el tipo de cambio ([open.er-api.com](https://open.er-api.com), sin API key) y convierte `precioCompra` a USD |
+
+```json
+POST /api/activos
+{ "simbolo": " eth ", "nombre": "Ethereum", "cantidad": 3, "precioCompra": 2000, "moneda": "EUR" }
+
+→ 201  { "simbolo": "ETH", "precioCompra": 2241.88, ... }    // 2000 EUR a la tasa del día
+```
+
+### Análisis — `POST /api/activos/analizar`
+
+Recibe un **array** de activos, los procesa y devuelve un reporte. **No guarda nada.** Los
+montos se interpretan en USD.
+
+```
+lote → FiltroDepuracion → FiltroAnalisisRiesgo → FiltroFormato → reporte
+```
+
+| Filtro | Qué hace |
+|---|---|
+| `FiltroDepuracion` | Descarta lo que no se puede analizar: no es un objeto, sin símbolo, `cantidad` o `precioCompra` en cero, negativos o no numéricos, `volatilidad` inválida. Cada descarte se loguea con su índice y motivo |
+| `FiltroAnalisisRiesgo` | Marca `high_risk` si el monto (`cantidad × precioCompra`) **supera** `UMBRAL_MONTO_USD` (`whale_alert`) o si la `volatilidad` informada **supera** `UMBRAL_VOLATILIDAD` (`alta_volatilidad`) |
+| `FiltroFormato` | Redondea `monto`, `precioCompra` y `volatilidad` a dos decimales, agrega metadatos de auditoría y arma el resumen |
+
+```json
+POST /api/activos/analizar
+[
+  { "simbolo": "btc", "cantidad": 10, "precioCompra": 50000.456 },
+  { "simbolo": "SOL", "cantidad": 1, "precioCompra": 100, "volatilidad": 90.456 },
+  { "simbolo": "ADA", "cantidad": 0, "precioCompra": 1 }
+]
+
+→ 200
+{
+  "auditoria": {
+    "idAnalisis": "b0860756-7058-48d1-b849-d2c4724c4c80",
+    "analizadoEn": "2026-10-06T03:32:05.280Z",
+    "filtrosAplicados": ["FiltroDepuracion", "FiltroAnalisisRiesgo", "FiltroFormato"]
+  },
+  "resumen": { "recibidos": 3, "descartados": 1, "analizados": 2, "altoRiesgo": 2 },
+  "activos": [
+    { "simbolo": "BTC", "cantidad": 10, "precioCompra": 50000.46, "monto": 500004.56,
+      "riesgo": "high_risk", "motivosRiesgo": ["whale_alert"] },
+    { "simbolo": "SOL", "cantidad": 1, "precioCompra": 100, "volatilidad": 90.46, "monto": 100,
+      "riesgo": "high_risk", "motivosRiesgo": ["alta_volatilidad"] }
+  ]
+}
+```
+
+Un elemento inválido **se descarta, no invalida el lote**. Si el body no es un array, 400.
+La `cantidad` no se redondea: es la fracción del activo y a dos decimales `0.00345` BTC
+pasaría a ser `0`. El riesgo se evalúa con el monto exacto, antes de redondear.
+
+### Logging
+
+Cada filtro registra su actividad con **Winston** y el pipeline registra cuáles terminaron
+bien y cuál falló:
+
+```
+[INFO] FiltroValidacion: Estructura del activo válida
+[INFO] Pipeline ingesta: FiltroValidacion ejecutado con éxito
+[INFO] FiltroNormalizacion: Símbolo BTC normalizado
+[INFO] Pipeline ingesta: FiltroNormalizacion ejecutado con éxito
+[INFO] FiltroConversionMoneda: Convertido 2000 EUR a 2241.88 USD (tasa 1.12094)
+[ERROR] Pipeline ingesta: Falló FiltroConversionMoneda: La moneda XXX no está soportada
+```
+
+Con `NODE_ENV=production` el log sale en JSON con *timestamp*; con `NODE_ENV=test` se
+silencia.
+
+### Tests
+
+```bash
+npm test
+```
+
+Los tests están en [`pruebas/`](pruebas/) y cubren cada filtro **por separado**, el
+runner y cada pipeline completo, incluido el **orden de ejecución** (se comprueba contra el
+orden de las líneas de log). Los filtros reciben sus dependencias por parámetro (logger,
+tasa de cambio, umbrales, reloj), así que se prueban sin red ni variables de entorno.
+
+---
+
 ## Estructura del proyecto
 
 ```
 src/
 ├── servidor.ts                    # punto de entrada: app.listen()
 ├── app.ts                         # arma Express: middlewares + rutas + errores
-├── config/env.ts                  # único archivo que lee process.env
+├── config/
+│   ├── env.ts                     # único archivo que lee process.env
+│   └── logger.ts                  # logger Winston
 ├── modelos/activo.ts              # tipos del dominio
 ├── datos/activosRepositorio.ts    # el array en memoria (único estado)
+├── pipeline/
+│   ├── pipeline.ts                # runner genérico: Filtro y Pipeline
+│   ├── ingesta/                   # validación → normalización → conversión de moneda
+│   └── analisis/                  # depuración → riesgo → formato
 ├── validaciones/activoValidacion.ts
 ├── servicios/
-│   ├── activosServicio.ts         # reglas de negocio del CRUD
-│   └── preciosServicio.ts         # llamada a CoinGecko
+│   ├── activosServicio.ts         # reglas de negocio del CRUD (usa el pipeline de ingesta)
+│   ├── analisisServicio.ts        # usa el pipeline de análisis
+│   ├── preciosServicio.ts         # llamada a CoinGecko
+│   └── tasasServicio.ts           # llamada a la API de tipo de cambio
 ├── controladores/activosControlador.ts
 ├── rutas/activosRutas.ts
 ├── errores/ErrorApi.ts
+├── utilidades/redondear.ts
 └── middlewares/manejadorErrores.ts
+
+pruebas/                           # tests de Jest (un archivo por filtro y por pipeline)
 ```
 
 La regla que sostiene la separación:
@@ -226,7 +345,9 @@ el repositorio no sabe de negocio.**
 Flujo de una petición:
 
 ```
-Cliente → rutas → controlador → servicio → repositorio (array en memoria)
+Cliente → rutas → controlador → servicio → pipeline de ingesta → repositorio (array en memoria)
+                                    │            └──→ tasasServicio → API de tipo de cambio
+                                    ├────→ pipeline de análisis (lote → reporte)
                                     └────→ preciosServicio → CoinGecko
 
 Cualquier throw de ErrorApi → manejadorErrores → { "error": { ... } }
@@ -244,7 +365,7 @@ Cualquier throw de ErrorApi → manejadorErrores → { "error": { ... } }
 1. Levantar la API (`npm run dev`).
 2. En Postman: **Import** → seleccionar
    [`postman/portafolio-cripto.postman_collection.json`](postman/portafolio-cripto.postman_collection.json).
-3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 17 de
+3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 22 de
    una sola vez.
 
 La colección trae dos variables: `baseUrl` (`http://localhost:3000`) e `idActivo`, que se
@@ -305,7 +426,14 @@ curl http://localhost:3000/api/ruta-inexistente                           # 404
 | Sin `dotenv` | `node --env-file=.env` es nativo desde Node 20.6. Una dependencia menos. |
 | Sin `tsx` / `ts-node` | Node ejecuta TypeScript directamente borrando los tipos. `tsc` se usa solo para el build. |
 | Sin `axios` | `fetch` es global y nativo. |
-| Sin librería de validación | 30 líneas de validación manual, más fáciles de leer que un esquema. |
+| Zod en el filtro de validación | Una sola fuente de verdad para tipo y reglas del body. Se conservan los mensajes de error del contrato anterior. |
+| Winston para el logging | Formato legible en desarrollo (`[INFO] Filtro: mensaje`), JSON en producción y silencio en tests. |
+| Jest sin `ts-jest` | Un transformador de 3 líneas (`module.stripTypeScriptTypes`) hace lo mismo que Node al ejecutar los `.ts`: los tests corren el mismo código que la app, sin otro compilador. |
+| Filtros con las dependencias por parámetro | Logger, tasa de cambio, umbrales, reloj e ids entran por parámetro: los filtros se prueban sin red ni variables de entorno. |
+| `Filtro.ejecutar` como propiedad y no como método | TypeScript compara los métodos de forma bivariante y aceptaría un filtro que espera otra entrada. Como propiedad, un orden inválido no compila. |
+| El análisis descarta elementos inválidos en vez de rechazar el lote | Un elemento malo no invalida a los demás; cada descarte queda en el log con su índice y motivo. |
+| `cantidad` no se redondea en el análisis | Es la fracción del activo: a dos decimales `0.00345` BTC pasaría a ser `0`. |
+| Precio guardado siempre en USD | La conversión ocurre al ingresar; el resto de la app (rendimiento contra CoinGecko) no necesita saber en qué moneda se compró. |
 | Sin `uuid` | `crypto.randomUUID()` viene en el core. |
 | `crypto.randomUUID()` en vez de un contador | Con `splice` los índices se reordenan; un contador obligaría a mantener el estado de la secuencia. |
 | Repositorio separado del servicio | Aísla el array: cambiar a base de datos toca un solo archivo. |
@@ -333,4 +461,6 @@ sin compilar en desarrollo y compilado en producción:
   gratuito de CoinGecko.
 - Resolver los símbolos vía `/coins/list` en vez del mapa fijo (se evitó porque descarga
   unas 15.000 monedas solo para traducir un identificador).
-- Persistencia real y tests automatizados.
+- Persistencia real (siguiente etapa del ejercicio).
+- Test unitario de `tasasServicio` y `preciosServicio`: hoy importan `config/env.ts`, que
+  corta el proceso si faltan variables; se verificaron contra las APIs reales.
