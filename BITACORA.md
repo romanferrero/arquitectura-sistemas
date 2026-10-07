@@ -4,6 +4,26 @@ Registro de cómo se trabaja el ejercicio entre el estudiante y Claude Code: qu�
 esfuerzo se usó en cada sesión, qué se decidió, quién lo decidió y cómo se verificó.
 El plan completo está en [PLAN.md](PLAN.md).
 
+## Resumen: skills y herramientas usadas
+
+Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron tres veces,
+siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUDE.md`).
+
+| Skill | Cuándo | Para qué | Resultado |
+|---|---|---|---|
+| `/code-review` (nivel *high*) | Cierre de la Parte 3 | Revisar lo que `develop` tenía de más que `main` | 9 hallazgos: 7 corregidos y 2 documentados |
+| `/code-review` (nivel *high*) | Cierre de la Parte 4 | Ídem, sobre las sesiones 4 a 7 | 10 hallazgos: 7 corregidos y 3 documentados |
+| `/security-review` | Cierre de la Parte 4 | Buscar vulnerabilidades en los cambios | Sin vulnerabilidades de alta confianza |
+
+Las tres corren en un subproceso aparte (no comparten el contexto de la sesión). En el resto de las sesiones no se
+usó ninguna skill.
+
+Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
+correr la colección de Postman, **Docker Compose**, **Jest** y pruebas de mutación hechas a mano.
+
+Los modelos usados: Opus 5.5 en la planificación (sesión 0) y Sonnet 5.5 en la implementación (sesiones 1 a 7 y las
+revisiones), siempre con esfuerzo alto.
+
 ---
 
 ## Sesión 0 — Planificación · 2026-10-05
@@ -239,7 +259,7 @@ verifica. Ahora el orden incorrecto falla al compilar.
 - **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (confirmado por el estudiante).
 - **Modo:** revisión y correcciones, en `fix/revision-parte-3`.
 - **Skill usada:** `/code-review` en nivel *high*, sobre todo lo que `develop` tenía de más
-  que `main` (las sesiones 1 a 3 completas). Se ejecutó en un subproceso y devolvió 8
+  que `main` (las sesiones 1 a 3 completas). Se ejecutó en un subproceso y devolvió 9
   hallazgos, que se evaluaron uno por uno.
 
 **Hallazgos y decisión**
@@ -512,7 +532,7 @@ TCP. El mismo defecto está en el compose del ejemplo del profesor.
 
 - **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
 - **Skill usada:** `/code-review` en nivel *high* sobre lo que `develop` tenía de más que `main` (sesiones 4 a 7).
-  Devolvió 9 hallazgos; se evaluaron uno por uno, en `fix/revision-parte-4`.
+  Devolvió 10 hallazgos; se evaluaron uno por uno, en `fix/revision-parte-4`.
 
 | # | Hallazgo | Decisión |
 |---|---|---|
