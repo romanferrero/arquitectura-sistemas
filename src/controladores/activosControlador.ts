@@ -18,14 +18,14 @@ import { env } from "../config/env.ts";
  */
 
 // GET /api/activos  (opcional: ?simbolo=BTC)
-export function listar(req: Request, res: Response): void {
+export async function listar(req: Request, res: Response): Promise<void> {
   const simbolo = typeof req.query["simbolo"] === "string" ? req.query["simbolo"] : undefined;
-  res.status(200).json(servicio.listarActivos(simbolo));
+  res.status(200).json(await servicio.listarActivos(simbolo));
 }
 
 // GET /api/activos/:id
-export function obtener(req: Request<{ id: string }>, res: Response): void {
-  res.status(200).json(servicio.obtenerActivo(req.params.id));
+export async function obtener(req: Request<{ id: string }>, res: Response): Promise<void> {
+  res.status(200).json(await servicio.obtenerActivo(req.params.id));
 }
 
 // POST /api/activos
@@ -40,8 +40,8 @@ export async function actualizar(req: Request<{ id: string }>, res: Response): P
 }
 
 // DELETE /api/activos/:id
-export function eliminar(req: Request<{ id: string }>, res: Response): void {
-  servicio.eliminarActivo(req.params.id);
+export async function eliminar(req: Request<{ id: string }>, res: Response): Promise<void> {
+  await servicio.eliminarActivo(req.params.id);
   res.status(204).send(); // 204 no lleva cuerpo
 }
 
