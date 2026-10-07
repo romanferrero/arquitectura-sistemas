@@ -410,3 +410,56 @@ ci` limpio pasa y `docker build` termina bien.
 - El servicio `api` dentro del compose (con `MYSQL_HOST=mysql`) queda para la sesión 7.
 - Un fallo de Mongo al arrancar corta la API; en la sesión 6 una caída en *ejecución* no debe cortar las
   operaciones.
+
+---
+
+## Sesión 6 — Auditoría en MongoDB · 2026-10-07
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el confirmado por el estudiante).
+- **Modo:** implementación, en `feature/sesion-6-auditoria-mongo`.
+- **Contexto:** la computadora se apagó entre la sesión 5 y esta; se comprobó que el repo, la rama
+  `develop` publicada y los contenedores estaban intactos antes de seguir.
+- **Herramientas:** edición de archivos, `mongosh` dentro del contenedor, Newman, `curl`,
+  pruebas de mutación a mano. Sin skills ni subagentes.
+
+**Qué se hizo**
+- [src/datos/modelos/registroAuditoriaModelo.ts](src/datos/modelos/registroAuditoriaModelo.ts): schema
+  Mongoose (como el del ejemplo): operación `CREAR | ACTUALIZAR | ELIMINAR`, `antes`/`despues`/`metadatos`
+  como `Mixed`, tres índices para las tres consultas que tiene.
+- [src/datos/auditoriaRepositorio.ts](src/datos/auditoriaRepositorio.ts): `registrar`, `historialDe`, `listar`;
+  solo alta y consulta. [mapeoAuditoria.ts](src/datos/mapeoAuditoria.ts): documento → registro, función pura.
+- [src/servicios/crearServicioAuditoria.ts](src/servicios/crearServicioAuditoria.ts): fábrica con el repositorio,
+  el logger y el tiempo máximo por parámetro; cableada en `auditoriaServicio.ts`.
+- `activosServicio`: crear → `CREAR` (con la conversión de moneda en `metadatos`); actualizar → `ACTUALIZAR`
+  (antes, después y `camposModificados`); eliminar → `ELIMINAR` (se lee el activo antes de borrar).
+- Endpoints `GET /api/activos/:id/historial` y `GET /api/auditoria` (`?operacion=`, `?limite=`).
+- Postman: 4 requests nuevos. README: sección de auditoría, endpoints, estructura y decisiones.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| La auditoría es de **mejor esfuerzo**: si falla, la operación responde bien y el error va al log | Claude, propuesto en el plan | MySQL ya confirmó, no hay transacción entre las dos bases y fallarle al cliente por el historial es peor que perder una línea |
+| Tiempo máximo de **2 s** para registrar | Claude | Con Mongo caído el driver tarda 5 s en rendirse en *cada* escritura |
+| Las consultas con Mongo caído dan **503**, no 500 | Claude | Es un servicio del que depende, no un bug de la API |
+| Historial de un id desconocido → 404; de uno eliminado → 200 | Claude | Es justo lo que el historial tiene que poder responder |
+| Operaciones en español (`CREAR`, `ACTUALIZAR`, `ELIMINAR`) | Claude | Convención del proyecto; el ejemplo las tenía en inglés |
+| Se agregaron `camposModificados` y `metadatos.origen` | Claude | El ejemplo del profesor guardaba `changedFields` y `metadata.source` |
+| Se leen `limite` (1–200, 50 por defecto) y `operacion` | Claude | Evitar devolver una colección que "puede crecer exponencialmente" entera |
+| Tres índices en vez de uno | Claude | Uno por consulta: por activo, general y filtrada por operación |
+
+**Verificación**
+- `npm run check` sin errores; `npm test`: 15 suites, 158 tests en verde (27 nuevos).
+- Mutaciones (3): no loguear el fallo de `registrar`, límite máximo 201 y sacar el tope de tiempo → las 3 detectadas.
+- Ciclo real contra MongoDB: crear en EUR → actualizar → eliminar. El historial trae los 3 registros en
+  orden, con la conversión (tasa 1.125), antes y después, y campos modificados; también están en Mongo
+  (`mongosh`) con sus 4 índices.
+- **MongoDB apagado con la API corriendo:** `POST` → 201 en 2,1 s y el activo queda en MySQL; el error
+  queda en el log; `GET` del historial → 503; `GET /activos` (MySQL) → 200. Al volver Mongo, la API se
+  reconectó sola y el siguiente `POST` se registró.
+- Newman, dos corridas seguidas: 27 requests, 56 aserciones, 0 fallas.
+
+**Pendientes / a tener en cuenta**
+- Mientras Mongo está caído, cada escritura demora hasta 2 s y queda sin registro (decisión asumida).
+- Un id mal escrito en `GET /api/activos/:id/historial` da 404 igual que uno inexistente.
+- El tema de consistencia entre las dos bases va a la respuesta de la Parte 4 (sesión 7).

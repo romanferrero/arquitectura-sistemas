@@ -103,6 +103,43 @@ Las reglas están también en la base y no solo en el código: aunque otra aplic
 directo en la tabla, MySQL rechaza un símbolo repetido o una cantidad que no sea positiva.
 Se usa `DECIMAL` y no `FLOAT` para no arrastrar errores de redondeo con dinero.
 
+### Auditoría en MongoDB
+
+Cada vez que el servicio **crea, actualiza o elimina** un activo en MySQL, guarda un registro en
+la colección `auditoria_activos` de MongoDB. Los registros no tienen forma fija, y por eso viven
+en MongoDB y no en una tabla:
+
+| Operación | `antes` | `despues` | Otros campos |
+|---|---|---|---|
+| `CREAR` | — | el activo creado | `metadatos.conversionMoneda` si se convirtió de moneda |
+| `ACTUALIZAR` | el activo anterior | el activo guardado | `camposModificados` |
+| `ELIMINAR` | el activo tal como era | — | — |
+
+```json
+GET /api/activos/5406e802-8334-4742-9529-38db013da828/historial
+
+[
+  { "operacion": "ELIMINAR", "entidadId": "5406e802-...", "antes": { "simbolo": "BTC", "cantidad": 1.25, "precioCompra": 42000 },
+    "metadatos": { "origen": "API" }, "ocurridoEn": "2026-10-07T20:55:10.113Z" },
+  { "operacion": "ACTUALIZAR", "antes": { "cantidad": 0.5 }, "despues": { "cantidad": 1.25 },
+    "camposModificados": ["cantidad", "precioCompra"], "ocurridoEn": "2026-10-07T20:55:10.060Z" },
+  { "operacion": "CREAR", "despues": { "simbolo": "BTC", "cantidad": 0.5, "precioCompra": 112.52 },
+    "metadatos": { "origen": "API", "conversionMoneda": { "monedaOriginal": "EUR", "precioOriginal": 100, "tasa": 1.12519 } },
+    "ocurridoEn": "2026-10-07T20:55:09.870Z" }
+]
+```
+
+Va del evento más reciente al más viejo y sigue disponible aunque el activo ya no exista (es
+justamente lo que queda). `GET /api/auditoria` lista el historial general; `?operacion=ELIMINAR`
+filtra y `?limite=` acota (de 1 a 200, 50 por defecto). Un id que nunca existió da 404.
+
+> **Si MongoDB falla, la operación no se pierde.** MySQL y MongoDB son dos escrituras
+> independientes y no hay una transacción que abarque las dos. Como MySQL ya confirmó lo que
+> importa, la auditoría es de **mejor esfuerzo**: si no se puede registrar (o MongoDB no responde
+> en 2 segundos), la API responde igual con éxito y deja el error en el log. El costo es que
+> puede haber operaciones sin registro. Las consultas del historial, en cambio, responden 503 si
+> MongoDB no está. La solución completa sería un *Transactional Outbox* (ver mejoras).
+
 ---
 
 ## Docker
@@ -168,6 +205,8 @@ Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 | PUT | `/api/activos/:id` | Reemplaza un activo | 200 | 400, 404, 409, 502 |
 | DELETE | `/api/activos/:id` | Elimina un activo | 204 | 404 |
 | POST | `/api/activos/analizar` | Analiza un lote de activos (no guarda nada) | 200 | 400 |
+| GET | `/api/activos/:id/historial` | Historial de un activo, también si ya fue eliminado | 200 | 404, 503 |
+| GET | `/api/auditoria` | Historial general (`?operacion=`, `?limite=`) | 200 | 400, 503 |
 | GET | `/api/activos/:id/precio` | Activo + cotización + rendimiento | 200 | 404, 502 |
 | GET | `/api/precios/:simbolo` | Cotización de un símbolo suelto | 200 | 400, 404, 502 |
 
@@ -181,7 +220,8 @@ Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 | 400 | Datos inválidos, JSON malformado, símbolo con formato inválido |
 | 404 | Id inexistente, ruta inexistente, o símbolo sin cotización disponible |
 | 409 | Ya existe un activo con ese símbolo |
-| 502 | La API externa de precios falló (timeout, red, respuesta inesperada) |
+| 502 | La API externa de precios o de tipo de cambio falló (timeout, red, respuesta inesperada) |
+| 503 | MongoDB no responde y se pidió el historial de auditoría |
 | 500 | Error no controlado |
 
 ### Formato de error
@@ -395,6 +435,8 @@ src/
 ├── datos/
 │   ├── activosRepositorio.ts      # acceso a la tabla activos (Sequelize); lanza SimboloDuplicadoError
 │   ├── mapeoActivo.ts             # fila de MySQL <-> Activo del dominio (funciones puras)
+│   ├── auditoriaRepositorio.ts    # historial de auditoría sobre MongoDB (Mongoose)
+│   ├── mapeoAuditoria.ts          # documento de MongoDB -> RegistroAuditoria (función pura)
 │   ├── conexiones.ts              # conexión a MySQL (Sequelize) y MongoDB (Mongoose)
 │   ├── modelos/activoModelo.ts    # modelo Sequelize de la tabla activos
 │   ├── migraciones/               # cambios de esquema versionados (up / down)
@@ -407,12 +449,14 @@ src/
 ├── servicios/
 │   ├── activosServicio.ts         # reglas de negocio del CRUD (usa el pipeline de ingesta)
 │   ├── analisisServicio.ts        # usa el pipeline de análisis
+│   ├── crearServicioAuditoria.ts  # registrar (mejor esfuerzo) y consultar el historial
+│   ├── auditoriaServicio.ts       # esa fábrica ya conectada a MongoDB y al logger
 │   ├── preciosServicio.ts         # llamada a CoinGecko
 │   └── tasasServicio.ts           # llamada a la API de tipo de cambio
-├── controladores/activosControlador.ts
+├── controladores/                 # activosControlador.ts y auditoriaControlador.ts
 ├── rutas/activosRutas.ts
 ├── errores/ErrorApi.ts
-├── utilidades/redondear.ts
+├── utilidades/                    # redondear.ts, camposModificados.ts
 └── middlewares/manejadorErrores.ts
 
 pruebas/                           # tests de Jest (un archivo por filtro y por pipeline)
@@ -427,6 +471,7 @@ Flujo de una petición:
 ```
 Cliente → rutas → controlador → servicio → pipeline de ingesta → repositorio → MySQL
                                     │            └──→ tasasServicio → API de tipo de cambio
+                                    │            └──→ auditoría → MongoDB (mejor esfuerzo)
                                     ├────→ pipeline de análisis (lote → reporte)
                                     └────→ preciosServicio → CoinGecko
 
@@ -446,7 +491,7 @@ Cualquier throw de ErrorApi → manejadorErrores → { "error": { ... } }
 1. Levantar la API (`npm run dev`).
 2. En Postman: **Import** → seleccionar
    [`postman/portafolio-cripto.postman_collection.json`](postman/portafolio-cripto.postman_collection.json).
-3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 22 de
+3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 27 de
    una sola vez.
 
 La colección trae dos variables: `baseUrl` (`http://localhost:3000`) e `idActivo`, que se
@@ -522,6 +567,10 @@ curl http://localhost:3000/api/ruta-inexistente                           # 404
 | El repositorio relee la fila después de escribir | MySQL redondea los `DECIMAL` en silencio; así el `POST` y el `GET` siguiente dicen lo mismo. |
 | Mapeo fila ↔ `Activo` en funciones puras | Concentra las dos diferencias de representación (DECIMAL como texto, fechas como `Date`) y se prueba sin base de datos. |
 | Rangos numéricos validados de antemano | Lo que la tabla no puede representar daría un 500; así da un 400 con un mensaje. |
+| La auditoría es de mejor esfuerzo | No hay transacción entre MySQL y MongoDB: si el historial falla, la operación ya confirmada no se deshace ni se le falla al cliente. Se paga con posibles operaciones sin registro. |
+| Tiempo máximo de 2 s para registrar | Con MongoDB caído, el driver tardaría 5 s en rendirse en cada escritura; así la demora es acotada. |
+| El historial se lee antes de borrar y sin tocar MySQL | El `ELIMINAR` guarda cómo era el activo; la consulta funciona aunque ya no exista. |
+| Consultas de historial con MongoDB caído → 503 | No es un bug de la API (500) sino un servicio del que depende que no está disponible. |
 | Migraciones al arrancar la API | Cómodo con una sola instancia. Con varias arrancando a la vez convendría un paso de migración aparte. |
 | 409 por símbolo duplicado | El portafolio tiene una única posición por activo. |
 | 404 vs 502 en precios | 404 si el símbolo no está soportado (no se llega a llamar a CoinGecko); 502 solo si CoinGecko falla de verdad, porque el error es de un servicio upstream y no nuestro. |
@@ -547,7 +596,8 @@ sin compilar en desarrollo y compilado en producción:
   gratuito de CoinGecko.
 - Resolver los símbolos vía `/coins/list` en vez del mapa fijo (se evitó porque descarga
   unas 15.000 monedas solo para traducir un identificador).
-- Auditoría de cada operación en MongoDB (siguiente etapa del ejercicio).
+- *Transactional Outbox* para la auditoría: guardar el evento en MySQL dentro de la misma
+  transacción que el cambio y copiarlo a MongoDB después, para no perder registros si Mongo cae.
 - Caché de tasas de cambio: hoy cada alta en otra moneda consulta la API, y esa consulta
   ocurre antes de comprobar si el símbolo ya existe (409).
 - Loguear los fallos del cliente (4xx) con un nivel menor que los del servidor: hoy un body
