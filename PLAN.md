@@ -9,7 +9,7 @@
 - [x] Sesión 4 — Infraestructura de datos y migraciones
 - [x] Sesión 5 — Repositorio de activos sobre MySQL
 - [x] Sesión 6 — Auditoría en MongoDB
-- [x] Sesión 7 — API en Compose y cierre (revisiones pendientes; falta el merge a `main`)
+- [x] Sesión 7 — API en Compose y cierre de la Parte 4 (revisiones hechas; falta el merge a `main`)
 
 El detalle de lo hecho en cada sesión está en [BITACORA.md](BITACORA.md).
 
