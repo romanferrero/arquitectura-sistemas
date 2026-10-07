@@ -463,3 +463,45 @@ ci` limpio pasa y `docker build` termina bien.
 - Mientras Mongo está caído, cada escritura demora hasta 2 s y queda sin registro (decisión asumida).
 - Un id mal escrito en `GET /api/activos/:id/historial` da 404 igual que uno inexistente.
 - El tema de consistencia entre las dos bases va a la respuesta de la Parte 4 (sesión 7).
+
+---
+
+## Sesión 7 — API en Compose y cierre de la Parte 4 · 2026-10-07
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el confirmado por el estudiante).
+- **Modo:** implementación, en `feature/sesion-7-api-en-compose`.
+- **Herramientas:** Docker Compose, Newman, `curl`. Las revisiones (`/code-review`, `/security-review`)
+  se registran en la entrada siguiente.
+
+**Qué se hizo**
+- Servicio `api` en [docker-compose.yml](docker-compose.yml): build del `Dockerfile`, `env_file: .env` y las
+  variables que cambian dentro de la red de Docker (`MYSQL_HOST=mysql`, `MONGO_HOST=mongodb`, puertos
+  internos), `depends_on` con `service_healthy`, healthcheck propio contra `/salud`.
+- `.dockerignore`: se suman `Contextos`, `pruebas` y las configuraciones de desarrollo.
+- README: sección Docker reescrita. `RESPUESTAS-PARTE-4.md`.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| La API también se publica solo en `127.0.0.1` | Claude | Salió en `0.0.0.0` (toda la red) y no tiene autenticación; las bases ya iban a local |
+| El healthcheck de MySQL pasó a `-h 127.0.0.1` | Claude | Ver hallazgo |
+| `NODE_ENV` queda como lo trae el `.env` (development) | Claude | Logs legibles para el curso; en producción real saldría JSON |
+| El mismo `.env` sirve para local y para el compose, que pisa lo que cambia | Claude | Un solo archivo de configuración |
+
+**Hallazgo: arrancar desde cero fallaba la primera vez.** Con un volumen nuevo, MySQL arranca un
+servidor temporal solo por socket y el healthcheck del ejemplo (`mysqladmin ping -h localhost`) le
+contestaba "sano". La API se conectaba antes de tiempo, salía con error, y la política `restart` la
+levantaba de nuevo: terminaba funcionando, pero `--wait` informaba `unhealthy`. Se corrigió probando por
+TCP. El mismo defecto está en el compose del ejemplo del profesor.
+
+**Verificación**
+- Los tres servicios `healthy` con un solo comando (`docker compose up -d --build --wait`).
+- **Newman contra la API dentro del contenedor**, dos corridas seguidas: 29 requests, 56 aserciones, 0 fallas.
+- `docker compose down` (sin `-v`) y volver a levantar: el activo y su historial siguen.
+- `docker compose stop api` (SIGTERM real): cierra en 1 s con código 0.
+- **Desde cero** (`down -v` + un comando), tres veces seguidas: 23–34 s, `healthy`, **0 reinicios** de la
+  API; las migraciones se aplican solas y el `POST` registra su auditoría.
+
+**Pendientes**
+- `/code-review` y `/security-review` de la Parte 4 y, con el OK del estudiante, merge a `main`.

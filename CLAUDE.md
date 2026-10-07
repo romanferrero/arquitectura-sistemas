@@ -33,7 +33,8 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
 | `npm run check` | Tipos de `src/` y `pruebas/`, sin emitir |
 | `npm test` | Jest en modo ESM |
 | `npm run build` | Compila a `dist/` |
-| `docker compose up -d --wait` | Levanta MySQL y MongoDB (Docker Desktop tiene que estar prendido) |
+| `docker compose up -d --build --wait` | Levanta la API, MySQL y MongoDB (Docker Desktop tiene que estar prendido) |
+| `docker compose up -d --wait mysql mongodb` | Solo las bases (la API con `npm run dev`) |
 | `npm run migrar` / `migrar:deshacer` / `migrar:estado` | Migraciones de MySQL |
 | `npm run db:verificar` | Comprueba que la app llegue a las dos bases |
 

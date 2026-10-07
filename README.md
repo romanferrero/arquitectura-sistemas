@@ -60,9 +60,12 @@ la entidad `Activo`, que tiene estructura fija y reglas de integridad, y **Mongo
 Mongoose) para la auditoría, que crece rápido y no necesita un esquema rígido.
 
 ```bash
-docker compose up -d --wait     # levanta MySQL 8.4 y MongoDB 8.0 y espera a que estén healthy
-npm run migrar                  # crea las tablas de MySQL
-npm run db:verificar            # comprueba que la app llega a las dos bases
+docker compose up -d --wait mysql mongodb   # solo las bases: MySQL 8.4 y MongoDB 8.0, esperando a que estén healthy
+npm run dev                                  # la API: conecta, migra y escucha (o npm run migrar a mano)
+npm run db:verificar                         # comprueba que la app llega a las dos bases
+
+# ...o todo, API incluida, dentro de Docker (ver la sección Docker):
+docker compose up -d --build --wait
 ```
 
 | Comando de Docker | Qué hace |
@@ -144,27 +147,48 @@ filtra y `?limite=` acota (de 1 a 200, 50 por defecto). Un id que nunca existió
 
 ## Docker
 
+### Todo el proyecto con un solo comando
+
 ```bash
-# Construir la imagen
-docker build -t portafolio-cripto .
-
-# Ejecutar el contenedor
-docker run --rm -p 3000:3000 --env-file .env portafolio-cripto
-
-# Verificar
+cp .env.example .env
+docker compose up -d --build --wait     # la API, MySQL y MongoDB
 curl http://localhost:3000/salud
 ```
 
-> **Las bases:** la API necesita MySQL y MongoDB para arrancar. Dentro de un contenedor,
-> `localhost` es el propio contenedor, así que con el `.env` tal cual no llega a las bases
-> (falla con `ECONNREFUSED`). Para probar la imagen contra las bases del host:
-> `docker run --env-file .env -e MYSQL_HOST=host.docker.internal -e MONGO_HOST=host.docker.internal ...`.
-> La API como un servicio más del `docker-compose.yml` se agrega en la última etapa.
->
+`docker-compose.yml` levanta tres servicios y espera a que estén sanos:
+
+| Servicio | Imagen | Notas |
+|---|---|---|
+| `api` | La del [`Dockerfile`](Dockerfile) (Node 24, multi-stage, usuario sin privilegios) | Arranca recién cuando MySQL y MongoDB están `healthy`; aplica las migraciones al iniciar |
+| `mysql` | `mysql:8.4` | Datos en el volumen `mysql_data` |
+| `mongodb` | `mongo:8.0` | Datos en el volumen `mongodb_data` |
+
+Los tres puertos se publican solo en `127.0.0.1`. La API recibe el mismo `.env` que usás en
+local, pero el compose **pisa** las variables que cambian dentro de la red de Docker: allí las
+bases no están en `localhost` sino bajo el nombre de su servicio (`MYSQL_HOST=mysql`,
+`MONGO_HOST=mongodb`) y se llega por el puerto interno (`3306`, `27017`), no por el que se
+publica al host.
+
+| Comando | Qué hace |
+|---|---|
+| `docker compose logs -f api` | Sigue los logs de la API |
+| `docker compose up -d --build --wait mysql mongodb` | Solo las bases (y la API con `npm run dev`) |
+| `docker compose down` | Baja todo y **conserva** los datos |
+| `docker compose down -v` | Baja todo y **borra** los datos: el próximo arranque parte de cero |
+
+### La imagen sola
+
+```bash
+docker build -t portafolio-cripto .
+docker run --rm -p 3000:3000 --env-file .env   -e MYSQL_HOST=host.docker.internal -e MONGO_HOST=host.docker.internal portafolio-cripto
+```
+
+Con el `.env` tal cual la API falla con `ECONNREFUSED`: dentro de un contenedor `localhost` es el
+propio contenedor. Ese ejemplo apunta la imagen a las bases publicadas en el host.
+
 > **Nota:** dentro del contenedor **no** se usa `--env-file` de Node. El archivo `.env`
 > queda excluido de la imagen (ver `.dockerignore`) y las variables se inyectan al
-> ejecutar, con `docker run --env-file .env`. Así la imagen no lleva configuración
-> adentro y sirve para cualquier entorno.
+> ejecutar. Así la imagen no lleva configuración adentro y sirve para cualquier entorno.
 
 ---
 
@@ -567,6 +591,8 @@ curl http://localhost:3000/api/ruta-inexistente                           # 404
 | El repositorio relee la fila después de escribir | MySQL redondea los `DECIMAL` en silencio; así el `POST` y el `GET` siguiente dicen lo mismo. |
 | Mapeo fila ↔ `Activo` en funciones puras | Concentra las dos diferencias de representación (DECIMAL como texto, fechas como `Date`) y se prueba sin base de datos. |
 | Rangos numéricos validados de antemano | Lo que la tabla no puede representar daría un 500; así da un 400 con un mensaje. |
+| El healthcheck de MySQL prueba por TCP (`127.0.0.1`) | Con un volumen nuevo, la imagen arranca un servidor temporal que solo atiende por socket y que con `localhost` se veía "sano": la API intentaba conectarse antes de tiempo, fallaba y dependía de que `restart` la levantara de nuevo. |
+| La API del compose espera a que las bases estén `healthy` | `depends_on` con `condition: service_healthy`: no arranca contra una base que todavía no atiende. |
 | La auditoría es de mejor esfuerzo | No hay transacción entre MySQL y MongoDB: si el historial falla, la operación ya confirmada no se deshace ni se le falla al cliente. Se paga con posibles operaciones sin registro. |
 | Tiempo máximo de 2 s para registrar | Con MongoDB caído, el driver tardaría 5 s en rendirse en cada escritura; así la demora es acotada. |
 | El historial se lee antes de borrar y sin tocar MySQL | El `ELIMINAR` guarda cómo era el activo; la consulta funciona aunque ya no exista. |

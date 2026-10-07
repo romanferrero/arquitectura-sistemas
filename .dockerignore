@@ -15,3 +15,11 @@ postman
 Dockerfile
 .dockerignore
 *.log
+
+# Material que no es parte de la aplicacion: tests, material del curso y la
+# configuracion de las herramientas de desarrollo.
+Contextos
+pruebas
+jest.config.js
+tsconfig.check.json
+docker-compose.yml
