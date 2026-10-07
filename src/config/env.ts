@@ -39,6 +39,21 @@ function numeroNoNegativoRequerido(nombre: string): number {
   return valor;
 }
 
+/**
+ * URI de MongoDB. `authSource=admin` es necesario porque el usuario root del
+ * contenedor se crea en la base `admin`, aunque los datos vivan en otra.
+ * `directConnection=true` evita que el driver intente descubrir un replica set.
+ * Usuario y password se codifican por si traen caracteres reservados (@, :, /).
+ */
+function construirMongoUri(): string {
+  const usuario = encodeURIComponent(textoRequerido("MONGO_INITDB_ROOT_USERNAME"));
+  const password = encodeURIComponent(textoRequerido("MONGO_INITDB_ROOT_PASSWORD"));
+  const host = textoRequerido("MONGO_HOST");
+  const puerto = numeroRequerido("MONGO_PORT");
+  const base = textoRequerido("MONGO_DATABASE");
+  return `mongodb://${usuario}:${password}@${host}:${puerto}/${base}?authSource=admin&directConnection=true`;
+}
+
 export const env = Object.freeze({
   PORT: numeroRequerido("PORT"),
   NODE_ENV: textoRequerido("NODE_ENV"),
@@ -48,4 +63,10 @@ export const env = Object.freeze({
   TIMEOUT_MS: numeroRequerido("TIMEOUT_MS"),
   UMBRAL_MONTO_USD: numeroNoNegativoRequerido("UMBRAL_MONTO_USD"),
   UMBRAL_VOLATILIDAD: numeroNoNegativoRequerido("UMBRAL_VOLATILIDAD"),
+  MYSQL_HOST: textoRequerido("MYSQL_HOST"),
+  MYSQL_PORT: numeroRequerido("MYSQL_PORT"),
+  MYSQL_DATABASE: textoRequerido("MYSQL_DATABASE"),
+  MYSQL_USER: textoRequerido("MYSQL_USER"),
+  MYSQL_PASSWORD: textoRequerido("MYSQL_PASSWORD"),
+  MONGO_URI: construirMongoUri(),
 });
