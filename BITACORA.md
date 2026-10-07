@@ -530,3 +530,26 @@ TCP. El mismo defecto está en el compose del ejemplo del profesor.
 **Verificación:** 158 tests y `check` en verde; tres arranques desde cero con el healthcheck de Mongo nuevo
 (0 reinicios de la API); 6 `PUT` simultáneos con una cadena de auditoría consistente; `migrar:estado` sin
 ninguna variable de Mongo; parámetros repetidos → 400; tres señales seguidas → un solo cierre.
+
+---
+
+## Revisión de seguridad de la Parte 4 · 2026-10-07
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
+- **Skill usada:** `/security-review` sobre lo que `develop` tenía de más que `main`. Para que pudiera calcular el
+  diff se apuntó `origin/HEAD` a `main` (es solo una referencia local; no toca el remoto).
+- **Resultado: sin vulnerabilidades de alta confianza.** El informe vino en inglés porque la consigna de la skill lo
+  estaba y pedía devolver solo el informe; el estudiante lo notó y se pasó a español.
+
+**Qué se revisó y por qué no hay problema**
+- **Inyección SQL:** todo pasa por Sequelize, que parametriza; las sentencias `ALTER TABLE` de la migración son constantes.
+- **Inyección NoSQL:** `entidadId` viene de un parámetro de ruta (siempre texto), `operacion` se valida contra una lista
+  cerrada y `limite` contra `^d+$` y un rango. Los parámetros repetidos se rechazan con 400 y no llegan a Mongo como arrays.
+- **Contenido guardado en la auditoría:** solo activos ya validados por Zod y metadatos armados por el servidor.
+- **Exposición de información:** el error no controlado responde un mensaje genérico; el stack va solo al log. No se loguean
+  la URI de Mongo ni las contraseñas.
+- **Red e imagen:** las tres piezas publican solo en `127.0.0.1`; el healthcheck usa `$$VAR` (no deja credenciales literales
+  en `docker inspect`); `.env` queda fuera de la imagen y el contenedor corre sin privilegios.
+
+**Fuera del alcance de esa revisión** (anotado como mejora en `RESPUESTAS-PARTE-4.md`): la API no tiene autenticación (ya
+era así y afecta a todos los endpoints) y la aplicación se conecta a MongoDB con el usuario root.
