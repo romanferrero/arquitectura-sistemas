@@ -280,3 +280,74 @@ verifica. Ahora el orden incorrecto falla al compilar.
 - **Siguiente:** sesión 4 (infraestructura de datos y migraciones), en una rama
   `feature/sesion-4-*` desde `develop`. Docker Desktop estaba apagado en la planificación:
   hay que prenderlo antes de empezar.
+
+---
+
+## Sesión 4 — Infraestructura de datos y migraciones · 2026-10-07
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el confirmado por el estudiante).
+- **Modo:** implementación, en `feature/sesion-4-infraestructura-datos`.
+- **Herramientas:** edición de archivos, Docker Compose (Claude lanzó Docker Desktop, que
+  estaba apagado), el cliente `mysql` dentro del contenedor para probar las restricciones, y
+  scripts descartables en el scratchpad. Sin skills ni subagentes.
+
+**Qué se hizo**
+- [docker-compose.yml](docker-compose.yml): MySQL 8.4 y MongoDB 8.0 tomados del ejemplo de
+  `Contextos/` (versiones fijadas, healthchecks, volúmenes, puertos solo en 127.0.0.1).
+- `.env` y `.env.example`: variables de ambas bases; el mismo archivo lo leen Compose y la app.
+- `config/env.ts`: valida las variables nuevas (fail fast) y arma la URI de Mongo
+  (`authSource=admin`, `directConnection=true`, usuario y password codificados).
+- [src/datos/conexiones.ts](src/datos/conexiones.ts): Sequelize y Mongoose.
+- [src/datos/modelos/activoModelo.ts](src/datos/modelos/activoModelo.ts): modelo de `activos`,
+  con `precioCompra` mapeado a `precio_compra`.
+- [src/datos/migraciones/](src/datos/migraciones/): `001-crear-activos` (tabla, símbolo único y
+  dos `CHECK` de valores positivos) y la lista explícita; ejecutor con **Umzug** y comando.
+- Scripts `migrar`, `migrar:deshacer`, `migrar:estado` y `db:verificar`.
+- README: sección "Bases de datos", variables, comandos y estructura.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| El contenedor de Mongo sale por el puerto **27018** en el `.env` local | Claude | Hay un MongoDB de Windows (servicio `MongoDB`) corriendo en 27017; no se lo toca porque puede ser de otro proyecto. `.env.example` conserva 27017 |
+| Comentarios del `.env` en línea aparte, no al final de la línea | Claude | Node y Compose los interpretan distinto según la versión |
+| `name: portafolio-cripto` en el compose | Claude | Volúmenes y contenedores con nombre propio y no el de la carpeta |
+| Migración autocontenida: no importa el modelo | Claude | Una migración describe el esquema de su momento; el modelo cambia después |
+| `CHECK` por SQL directo | Claude | Es la forma explícita en MySQL 8 y el error de la base es claro |
+| Longitudes `simbolo` 10 y `nombre` 50 (el ejemplo usaba 15 y 100) | Claude | Coinciden con las reglas de validación de la API |
+| `DECIMAL(24,8)` y `DECIMAL(20,2)`, collation `utf8mb4_0900_ai_ci` | Del ejemplo | Dinero sin `FLOAT`; el símbolo único no distingue mayúsculas |
+| Se agregaron `migrar:estado` y `db:verificar` (no estaban en el plan) | Claude | Permiten probar Mongo antes de la sesión 6 y distinguir "no llega a la base" de "bug de la app" |
+| Helper `describirError` | Claude | Los errores de conexión de Sequelize llegan con `message` vacío (se vio al probar con el puerto equivocado) |
+| `umzug` y `sequelize` con avisos de `npm audit` | Claude, **a validar** | Ver pendientes |
+
+**Verificación**
+- `npm run check` sin errores; `npm test`: 11 suites, 120 tests en verde (15 nuevos: lista de
+  migraciones, migración 001 contra un `QueryInterface` falso y `describirError`).
+- Mutación: cambiar `> 0` por `>= 0` en un `CHECK` → un test falla.
+- `docker compose up -d --wait`: MySQL y MongoDB `healthy`. `db:verificar`: MySQL 8.4.11 y
+  MongoDB responden.
+- `migrar` crea `activos` y `migraciones`; repetirlo dice "no hay pendientes";
+  `migrar:deshacer` borra la tabla; `migrar` la recrea. También funciona desde `dist/`.
+- **MySQL hace cumplir las reglas**, probado con inserts a mano: símbolo duplicado (incluso en
+  minúscula) → error 1062; cantidad 0 → error 3819; precio negativo → error 3819.
+- El modelo de Sequelize crea y lee filas: DECIMAL como texto, fechas como `Date`, mapeo de
+  `precio_compra` a `precioCompra`.
+- Caminos de error: MySQL en un puerto equivocado → `SequelizeConnectionRefusedError:
+  ECONNREFUSED`, exit 1; la app contra el MongoDB de Windows → "Authentication failed"; falta
+  una variable → corta el arranque nombrándola.
+
+**Hallazgos y pendientes**
+- **Redondeo silencioso de MySQL:** `precioCompra: 98.456` se guardó como `98.46`. Si el
+  repositorio devolviera lo que recibió, el POST diría 98.456 y el GET siguiente 98.46.
+  Se resuelve en la sesión 5 (releer la fila tras escribir); quedó anotado en `PLAN.md`.
+- **`npm audit --omit=dev` pasó de 0 a 6 avisos moderados**, todos transitivos: `umzug` →
+  `@rushstack/ts-command-line` → `sprintf-js` (solo afecta su herramienta de línea de comandos,
+  que no usamos) y `sequelize` 6 → `uuid` < 11 (el aviso es sobre un parámetro `buf` que
+  Sequelize no usa). Los arreglos que propone npm instalan versiones de hace años, así que no se
+  aplicaron. Sequelize 6.37.8 es la misma versión que fija el ejemplo del profesor.
+- El `.env.example` trae credenciales de desarrollo local tomadas del ejemplo; no deben usarse
+  fuera de la máquina local.
+- Los contenedores quedan corriendo al cerrar la sesión (`docker compose stop` para
+  detenerlos; los datos se conservan).
+- La imagen de la API todavía no se conecta a las bases: eso llega con la sesión 5 y el
+  servicio `api` del compose en la sesión 7.

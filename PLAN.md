@@ -6,7 +6,7 @@
 - [x] Sesión 1 — Base del pipeline, logger y tests
 - [x] Sesión 2 — Pipeline de ingesta
 - [x] Sesión 3 — Pipeline de análisis y cierre de la Parte 3 (**Parte 3 en `main`**)
-- [ ] Sesión 4 — Infraestructura de datos y migraciones
+- [x] Sesión 4 — Infraestructura de datos y migraciones
 - [ ] Sesión 5 — Repositorio de activos sobre MySQL
 - [ ] Sesión 6 — Auditoría en MongoDB
 - [ ] Sesión 7 — API en Compose y cierre
@@ -141,6 +141,10 @@ Código:
 - `servidor.ts`: conectar MySQL → correr migraciones pendientes → conectar Mongo →
   `listen`; cierre ordenado de conexiones en `SIGTERM`/`SIGINT`.
 - Verificar que los datos sobreviven a un reinicio de la API.
+- **Redondeo de MySQL (hallado en la sesión 4):** `DECIMAL(20,2)` y `DECIMAL(24,8)` redondean
+  en silencio (`98.456` se guarda como `98.46`). El repositorio tiene que devolver lo que
+  quedó realmente guardado (releer la fila tras escribir) para que el POST y el GET siguiente
+  digan lo mismo.
 
 ### Sesión 6 — Auditoría en MongoDB
 - `src/datos/modelos/registroAuditoriaModelo.ts` — schema Mongoose como el del ejemplo:

@@ -33,6 +33,9 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
 | `npm run check` | Tipos de `src/` y `pruebas/`, sin emitir |
 | `npm test` | Jest en modo ESM |
 | `npm run build` | Compila a `dist/` |
+| `docker compose up -d --wait` | Levanta MySQL y MongoDB (Docker Desktop tiene que estar prendido) |
+| `npm run migrar` / `migrar:deshacer` / `migrar:estado` | Migraciones de MySQL |
+| `npm run db:verificar` | Comprueba que la app llegue a las dos bases |
 
 ## Convenciones
 
@@ -48,4 +51,8 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
   `src/middlewares/manejadorErrores.ts`.
 - Los filtros de un pipeline reciben sus dependencias por parámetro, para testearlos sin
   red ni variables de entorno.
+- El esquema de MySQL solo cambia por migraciones (`src/datos/migraciones/`), nunca con `sync()`.
+  Una migración ya aplicada no se edita: se agrega una nueva.
+- En esta máquina hay un MongoDB instalado en Windows que ocupa el puerto 27017: el `.env`
+  local usa `MONGO_PORT=27018` para el contenedor. `.env.example` conserva 27017.
 - Tests en `pruebas/`, importando `describe`/`test`/`expect` desde `@jest/globals`.
