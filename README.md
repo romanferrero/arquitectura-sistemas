@@ -591,6 +591,8 @@ curl http://localhost:3000/api/ruta-inexistente                           # 404
 | El repositorio relee la fila después de escribir | MySQL redondea los `DECIMAL` en silencio; así el `POST` y el `GET` siguiente dicen lo mismo. |
 | Mapeo fila ↔ `Activo` en funciones puras | Concentra las dos diferencias de representación (DECIMAL como texto, fechas como `Date`) y se prueba sin base de datos. |
 | Rangos numéricos validados de antemano | Lo que la tabla no puede representar daría un 500; así da un 400 con un mensaje. |
+| `PUT` lee y escribe en una transacción con la fila bloqueada (`SELECT ... FOR UPDATE`) | Si dos `PUT` llegan a la vez, el segundo espera al primero: el `antes` de la auditoría es lo que de verdad se pisó. Con 6 `PUT` simultáneos, cada `antes` es el `despues` del anterior. |
+| El healthcheck de Mongo se autentica | El `mongod` temporal de la inicialización no tiene autenticación y respondería "sano" a un ping anónimo antes de que exista el usuario. |
 | El healthcheck de MySQL prueba por TCP (`127.0.0.1`) | Con un volumen nuevo, la imagen arranca un servidor temporal que solo atiende por socket y que con `localhost` se veía "sano": la API intentaba conectarse antes de tiempo, fallaba y dependía de que `restart` la levantara de nuevo. |
 | La API del compose espera a que las bases estén `healthy` | `depends_on` con `condition: service_healthy`: no arranca contra una base que todavía no atiende. |
 | La auditoría es de mejor esfuerzo | No hay transacción entre MySQL y MongoDB: si el historial falla, la operación ya confirmada no se deshace ni se le falla al cliente. Se paga con posibles operaciones sin registro. |
