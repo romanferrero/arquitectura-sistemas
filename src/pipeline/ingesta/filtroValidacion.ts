@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ErrorApi } from "../../errores/ErrorApi.ts";
+import { CANTIDAD_MINIMA, PRECIO_MINIMO, VALOR_MAXIMO } from "../../modelos/limites.ts";
 import { validarSimbolo } from "../../validaciones/activoValidacion.ts";
 import type { Filtro } from "../pipeline.ts";
 import type { ActivoEntrada } from "./tipos.ts";
@@ -27,12 +28,24 @@ const esquemaActivo = z.object(
       .string({ error: "nombre es obligatorio y debe ser un texto" })
       .refine((valor) => valor.trim().length > 0, "nombre no puede estar vacío")
       .refine((valor) => valor.trim().length <= 50, "nombre no puede superar los 50 caracteres"),
+    // Los refine de "minimo" dejan pasar los valores <= 0 para que un cero o un
+    // negativo informe un solo error (el de positive) y no dos.
     cantidad: z
       .number({ error: "cantidad es obligatorio y debe ser un número" })
-      .positive("cantidad debe ser mayor a 0"),
+      .positive("cantidad debe ser mayor a 0")
+      .refine(
+        (valor) => valor <= 0 || valor >= CANTIDAD_MINIMA,
+        `cantidad no puede ser menor a ${CANTIDAD_MINIMA.toFixed(8)} (admite 8 decimales)`,
+      )
+      .max(VALOR_MAXIMO, `cantidad no puede superar ${VALOR_MAXIMO}`),
     precioCompra: z
       .number({ error: "precioCompra es obligatorio y debe ser un número" })
-      .positive("precioCompra debe ser mayor a 0"),
+      .positive("precioCompra debe ser mayor a 0")
+      .refine(
+        (valor) => valor <= 0 || valor >= PRECIO_MINIMO,
+        `precioCompra no puede ser menor a ${PRECIO_MINIMO} (admite 2 decimales)`,
+      )
+      .max(VALOR_MAXIMO, `precioCompra no puede superar ${VALOR_MAXIMO}`),
     moneda: z
       .string({ error: "moneda debe ser un texto (ej: USD, EUR)" })
       .refine(

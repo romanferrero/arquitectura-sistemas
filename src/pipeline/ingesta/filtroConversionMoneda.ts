@@ -1,4 +1,5 @@
 import { ErrorApi } from "../../errores/ErrorApi.ts";
+import { VALOR_MAXIMO } from "../../modelos/limites.ts";
 import type { ObtenerTasa } from "../../servicios/tasasServicio.ts";
 import { redondear } from "../../utilidades/redondear.ts";
 import type { Filtro } from "../pipeline.ts";
@@ -39,6 +40,14 @@ export function crearFiltroConversionMoneda(dependencias: {
         throw new ErrorApi(
           400,
           `El precio convertido a ${MONEDA_BASE} es menor a 0.01; revisá precioCompra y moneda`,
+        );
+      }
+
+      // Y al reves: con una tasa alta el precio convertido puede no entrar en la tabla.
+      if (precioConvertido > VALOR_MAXIMO) {
+        throw new ErrorApi(
+          400,
+          `El precio convertido a ${MONEDA_BASE} supera el máximo permitido (${VALOR_MAXIMO})`,
         );
       }
 
