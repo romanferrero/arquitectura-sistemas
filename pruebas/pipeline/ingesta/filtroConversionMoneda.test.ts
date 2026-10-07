@@ -107,6 +107,16 @@ describe("FiltroConversionMoneda", () => {
     ).rejects.toMatchObject({ estado: 400 });
   });
 
+  test("rechaza con 400 si el precio convertido supera el máximo que entra en la tabla", async () => {
+    const { obtenerTasa } = crearTasaFalsa({ VES: 1e6 });
+    const filtro = crearFiltroConversionMoneda({ obtenerTasa });
+
+    // 1e10 x 1e6 = 1e16, por encima del maximo de 1e15.
+    await expect(
+      filtro.ejecutar({ ...activoEnUsd, moneda: "VES", precioCompra: 1e10 }, registradorSilencioso),
+    ).rejects.toMatchObject({ estado: 400 });
+  });
+
   test("registra si convirtió o no", async () => {
     const { lineas, registradorDe } = crearRegistroEnMemoria();
     const { obtenerTasa } = crearTasaFalsa({ EUR: 1.08 });

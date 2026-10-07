@@ -1,7 +1,7 @@
 # API REST — Portafolio de Criptoactivos
 
 API REST para gestionar un portafolio de criptoactivos, con CRUD completo sobre
-almacenamiento en memoria, integración con APIs externas (cotizaciones y tipo de cambio)
+persistencia en MySQL, integración con APIs externas (cotizaciones y tipo de cambio)
 y procesamiento con el patrón **Pipes & Filters**: un pipeline de ingesta para los activos
 nuevos y otro de análisis de riesgo para lotes.
 
@@ -118,6 +118,12 @@ docker run --rm -p 3000:3000 --env-file .env portafolio-cripto
 curl http://localhost:3000/salud
 ```
 
+> **Las bases:** la API necesita MySQL y MongoDB para arrancar. Dentro de un contenedor,
+> `localhost` es el propio contenedor, así que con el `.env` tal cual no llega a las bases
+> (falla con `ECONNREFUSED`). Para probar la imagen contra las bases del host:
+> `docker run --env-file .env -e MYSQL_HOST=host.docker.internal -e MONGO_HOST=host.docker.internal ...`.
+> La API como un servicio más del `docker-compose.yml` se agrega en la última etapa.
+>
 > **Nota:** dentro del contenedor **no** se usa `--env-file` de Node. El archivo `.env`
 > queda excluido de la imagen (ver `.dockerignore`) y las variables se inyectan al
 > ejecutar, con `docker run --env-file .env`. Así la imagen no lleva configuración
@@ -216,14 +222,20 @@ en el cuerpo, se ignora.
 |---|---|
 | `simbolo` | 1–10 caracteres alfanuméricos; se normaliza a mayúsculas (`btc` → `BTC`) |
 | `nombre` | Texto no vacío, máximo 50 caracteres |
-| `cantidad` | Número mayor a 0 |
-| `precioCompra` | Número mayor a 0 |
+| `cantidad` | Número entre `0.00000001` y `1000000000000000` (8 decimales) |
+| `precioCompra` | Número entre `0.01` y `1000000000000000` (2 decimales) |
 | `moneda` | Opcional. Código de 3 letras (`EUR`, `uyu`...); si falta se asume `USD` |
 
 Si `moneda` no es USD, el servidor consulta el tipo de cambio y **guarda `precioCompra`
 convertido a USD** con dos decimales: `{"precioCompra": 2000, "moneda": "EUR"}` se guarda
 como `2241.88`. El activo guardado no lleva el campo `moneda`. Una moneda inexistente da
 400; si la API de tipo de cambio no responde, 502.
+
+Los rangos de `cantidad` y `precioCompra` son los que entran en las columnas `DECIMAL` de la
+tabla: un valor positivo pero más chico (como `cantidad: 0.000000001`) MySQL lo redondearía a
+cero y violaría el `CHECK`, así que se rechaza con 400 en lugar de fallar con un 500. Con más
+decimales de los que admite la columna, el valor se redondea y la respuesta devuelve **lo que
+quedó guardado** (`precioCompra: 98.456` responde `98.46`).
 
 Se devuelven **todos** los errores de validación juntos, no solo el primero.
 Además, el **símbolo es único** dentro del portafolio: hay una sola posición por activo.
@@ -381,7 +393,8 @@ src/
 │   └── logger.ts                  # logger Winston
 ├── modelos/activo.ts              # tipos del dominio
 ├── datos/
-│   ├── activosRepositorio.ts      # el array en memoria (único estado, por ahora)
+│   ├── activosRepositorio.ts      # acceso a la tabla activos (Sequelize); lanza SimboloDuplicadoError
+│   ├── mapeoActivo.ts             # fila de MySQL <-> Activo del dominio (funciones puras)
 │   ├── conexiones.ts              # conexión a MySQL (Sequelize) y MongoDB (Mongoose)
 │   ├── modelos/activoModelo.ts    # modelo Sequelize de la tabla activos
 │   ├── migraciones/               # cambios de esquema versionados (up / down)
@@ -412,7 +425,7 @@ el repositorio no sabe de negocio.**
 Flujo de una petición:
 
 ```
-Cliente → rutas → controlador → servicio → pipeline de ingesta → repositorio (array en memoria)
+Cliente → rutas → controlador → servicio → pipeline de ingesta → repositorio → MySQL
                                     │            └──→ tasasServicio → API de tipo de cambio
                                     ├────→ pipeline de análisis (lote → reporte)
                                     └────→ preciosServicio → CoinGecko
@@ -420,10 +433,11 @@ Cliente → rutas → controlador → servicio → pipeline de ingesta → repos
 Cualquier throw de ErrorApi → manejadorErrores → { "error": { ... } }
 ```
 
-> **Almacenamiento temporal:** los datos viven en un array en memoria y **se pierden al
-> reiniciar el proceso**. Es lo que pide la consigna. Al estar aislados en
-> `activosRepositorio.ts`, migrar a una base de datos implicaría reescribir solo ese
-> archivo.
+> **Persistencia:** los activos viven en MySQL y **sobreviven a un reinicio** de la API. Al
+> arrancar, `servidor.ts` conecta MySQL, aplica las migraciones pendientes, conecta MongoDB
+> y recién entonces escucha; si algo falla, la API no levanta y lo dice con un mensaje
+> claro. Pasar de la memoria a la base reescribió solo `activosRepositorio.ts`: los
+> servicios y controladores solo sumaron `async`/`await`.
 
 ---
 
@@ -439,8 +453,8 @@ La colección trae dos variables: `baseUrl` (`http://localhost:3000`) e `idActiv
 completa sola — el request *03 - Crear activo BTC* guarda el id devuelto y los siguientes
 lo reutilizan, así no hace falta copiar y pegar UUIDs a mano.
 
-> Si se corre la colección dos veces seguidas, reiniciar la API antes: los activos de la
-> corrida anterior siguen en memoria y el paso 03 devolvería 409.
+> La colección se puede correr las veces que haga falta: el request *00 - Limpiar el
+> portafolio* borra los activos de corridas anteriores (los datos ahora persisten en MySQL).
 
 ### Equivalente en `curl`
 
@@ -503,7 +517,12 @@ curl http://localhost:3000/api/ruta-inexistente                           # 404
 | Precio guardado siempre en USD | La conversión ocurre al ingresar; el resto de la app (rendimiento contra CoinGecko) no necesita saber en qué moneda se compró. |
 | Sin `uuid` | `crypto.randomUUID()` viene en el core. |
 | `crypto.randomUUID()` en vez de un contador | Con `splice` los índices se reordenan; un contador obligaría a mantener el estado de la secuencia. |
-| Repositorio separado del servicio | Aísla el array: cambiar a base de datos toca un solo archivo. |
+| Repositorio separado del servicio | Aísla el acceso a los datos. Se comprobó en la práctica: pasar de un array a MySQL reescribió solo ese archivo. |
+| El símbolo único lo hace cumplir la restricción `UNIQUE`, no una búsqueda previa | "Buscar y después guardar" no es seguro: dos pedidos simultáneos pasan la búsqueda a la vez. Con 5 `POST` simultáneos del mismo símbolo, 1 da 201 y 4 dan 409. |
+| El repositorio relee la fila después de escribir | MySQL redondea los `DECIMAL` en silencio; así el `POST` y el `GET` siguiente dicen lo mismo. |
+| Mapeo fila ↔ `Activo` en funciones puras | Concentra las dos diferencias de representación (DECIMAL como texto, fechas como `Date`) y se prueba sin base de datos. |
+| Rangos numéricos validados de antemano | Lo que la tabla no puede representar daría un 500; así da un 400 con un mensaje. |
+| Migraciones al arrancar la API | Cómodo con una sola instancia. Con varias arrancando a la vez convendría un paso de migración aparte. |
 | 409 por símbolo duplicado | El portafolio tiene una única posición por activo. |
 | 404 vs 502 en precios | 404 si el símbolo no está soportado (no se llega a llamar a CoinGecko); 502 solo si CoinGecko falla de verdad, porque el error es de un servicio upstream y no nuestro. |
 | Sin try/catch en los controladores | Express 5 deriva automáticamente al manejador de errores las excepciones y las promesas rechazadas. |
@@ -528,7 +547,7 @@ sin compilar en desarrollo y compilado en producción:
   gratuito de CoinGecko.
 - Resolver los símbolos vía `/coins/list` en vez del mapa fijo (se evitó porque descarga
   unas 15.000 monedas solo para traducir un identificador).
-- Persistencia real (siguiente etapa del ejercicio).
+- Auditoría de cada operación en MongoDB (siguiente etapa del ejercicio).
 - Caché de tasas de cambio: hoy cada alta en otra moneda consulta la API, y esa consulta
   ocurre antes de comprobar si el símbolo ya existe (409).
 - Loguear los fallos del cliente (4xx) con un nivel menor que los del servidor: hoy un body

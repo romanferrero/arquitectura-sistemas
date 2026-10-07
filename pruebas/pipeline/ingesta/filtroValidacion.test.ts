@@ -102,6 +102,40 @@ describe("FiltroValidacion", () => {
     },
   );
 
+  describe("límites que admite la tabla de activos", () => {
+    test("acepta justo el mínimo y el máximo de cantidad y de precio", async () => {
+      await expect(validar({ ...bodyValido, cantidad: 0.00000001, precioCompra: 0.01 })).resolves.toBeDefined();
+      await expect(validar({ ...bodyValido, cantidad: 1e15, precioCompra: 1e15 })).resolves.toBeDefined();
+    });
+
+    test("rechaza una cantidad positiva pero menor que 8 decimales, que MySQL redondearía a 0", async () => {
+      await expect(validar({ ...bodyValido, cantidad: 0.000000001 })).rejects.toMatchObject({
+        detalles: ["cantidad no puede ser menor a 0.00000001 (admite 8 decimales)"],
+      });
+    });
+
+    test("rechaza un precio positivo pero menor que 0.01, que MySQL redondearía a 0", async () => {
+      await expect(validar({ ...bodyValido, precioCompra: 0.001 })).rejects.toMatchObject({
+        detalles: ["precioCompra no puede ser menor a 0.01 (admite 2 decimales)"],
+      });
+    });
+
+    test("rechaza una cantidad y un precio por encima del máximo", async () => {
+      await expect(validar({ ...bodyValido, cantidad: 1e16, precioCompra: 1e16 })).rejects.toMatchObject({
+        detalles: [
+          "cantidad no puede superar 1000000000000000",
+          "precioCompra no puede superar 1000000000000000",
+        ],
+      });
+    });
+
+    test("un cero o un negativo siguen dando un solo error, no dos", async () => {
+      await expect(validar({ ...bodyValido, cantidad: 0, precioCompra: -5 })).rejects.toMatchObject({
+        detalles: ["cantidad debe ser mayor a 0", "precioCompra debe ser mayor a 0"],
+      });
+    });
+  });
+
   test("registra que la estructura es válida", async () => {
     const { lineas, registradorDe } = crearRegistroEnMemoria();
 

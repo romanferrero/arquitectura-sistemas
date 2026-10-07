@@ -21,16 +21,13 @@ import { redondear } from "../utilidades/redondear.ts";
 // activo antes de guardarse. Aca se le conectan el logger y la API de tasas.
 const pipelineIngesta = crearPipelineIngesta({ registradorDe, obtenerTasa: obtenerTasaAUsd });
 
-export function listarActivos(simbolo?: string): Activo[] {
-  const activos = repositorio.listar();
-  if (simbolo === undefined) return activos;
-
-  const buscado = simbolo.trim().toUpperCase();
-  return activos.filter((activo) => activo.simbolo === buscado);
+export async function listarActivos(simbolo?: string): Promise<Activo[]> {
+  // El filtro se resuelve en la base (WHERE), no trayendo todo para filtrar aca.
+  return await repositorio.listar(simbolo?.trim().toUpperCase());
 }
 
-export function obtenerActivo(id: string): Activo {
-  const activo = repositorio.buscarPorId(id);
+export async function obtenerActivo(id: string): Promise<Activo> {
+  const activo = await repositorio.buscarPorId(id);
   if (activo === undefined) {
     throw new ErrorApi(404, `No existe un activo con id ${id}`);
   }
@@ -41,35 +38,33 @@ export function obtenerActivo(id: string): Activo {
 export async function crearActivo(cuerpo: unknown): Promise<Activo> {
   const { datos } = await pipelineIngesta.ejecutar(cuerpo); // 400 / 502 si falla un filtro
 
-  // Regla de negocio: una sola posicion por simbolo en el portafolio.
-  const existente = repositorio.buscarPorSimbolo(datos.simbolo);
-  if (existente !== undefined) {
-    throw new ErrorApi(409, `Ya existe un activo con el símbolo ${datos.simbolo}`);
-  }
-
+  // Regla de negocio: una sola posicion por simbolo en el portafolio. La hace
+  // cumplir la restriccion UNIQUE de la base: no se busca antes, porque dos
+  // pedidos simultaneos podrian pasar esa comprobacion a la vez.
   const ahora = new Date().toISOString();
-  return repositorio.guardar({
-    id: randomUUID(),
-    ...datos,
-    creadoEn: ahora,
-    actualizadoEn: ahora,
-  });
+  try {
+    return await repositorio.guardar({
+      id: randomUUID(),
+      ...datos,
+      creadoEn: ahora,
+      actualizadoEn: ahora,
+    });
+  } catch (error) {
+    if (error instanceof repositorio.SimboloDuplicadoError) {
+      throw new ErrorApi(409, `Ya existe un activo con el símbolo ${datos.simbolo}`);
+    }
+    throw error;
+  }
 }
 
 export async function actualizarActivo(id: string, cuerpo: unknown): Promise<Activo> {
-  obtenerActivo(id); // 404 enseguida si no existe, sin gastar el pipeline
+  await obtenerActivo(id); // 404 enseguida si no existe, sin gastar el pipeline
 
   const { datos } = await pipelineIngesta.ejecutar(cuerpo); // 400 / 502 si falla un filtro
 
   // Se vuelve a leer: mientras el pipeline esperaba a la API de tasas el activo
   // pudo borrarse o modificarse, y no hay que pisarlo con datos viejos.
-  const actual = obtenerActivo(id);
-
-  // El simbolo puede cambiar, pero no puede pisar al de OTRO activo.
-  const existente = repositorio.buscarPorSimbolo(datos.simbolo);
-  if (existente !== undefined && existente.id !== id) {
-    throw new ErrorApi(409, `Ya existe otro activo con el símbolo ${datos.simbolo}`);
-  }
+  const actual = await obtenerActivo(id);
 
   const actualizado: Activo = {
     id: actual.id, // el id nunca cambia, aunque venga en el body
@@ -78,12 +73,24 @@ export async function actualizarActivo(id: string, cuerpo: unknown): Promise<Act
     actualizadoEn: new Date().toISOString(),
   };
 
-  repositorio.reemplazar(id, actualizado);
-  return actualizado;
+  // El simbolo puede cambiar, pero no puede pisar al de OTRO activo: lo
+  // garantiza la restriccion UNIQUE de la base.
+  try {
+    const guardado = await repositorio.reemplazar(id, actualizado);
+    if (guardado === undefined) {
+      throw new ErrorApi(404, `No existe un activo con id ${id}`); // se borro mientras tanto
+    }
+    return guardado; // lo que quedo en la base, no lo que se intento guardar
+  } catch (error) {
+    if (error instanceof repositorio.SimboloDuplicadoError) {
+      throw new ErrorApi(409, `Ya existe otro activo con el símbolo ${datos.simbolo}`);
+    }
+    throw error;
+  }
 }
 
-export function eliminarActivo(id: string): void {
-  if (!repositorio.eliminar(id)) {
+export async function eliminarActivo(id: string): Promise<void> {
+  if (!(await repositorio.eliminar(id))) {
     throw new ErrorApi(404, `No existe un activo con id ${id}`);
   }
 }
@@ -96,7 +103,7 @@ export function eliminarActivo(id: string): void {
  * de la promesa al manejador de errores.
  */
 export async function obtenerActivoConPrecio(id: string): Promise<ActivoConPrecio> {
-  const activo = obtenerActivo(id); // 404 si no existe
+  const activo = await obtenerActivo(id); // 404 si no existe
   const precioActual = await obtenerPrecio(activo.simbolo); // 502 si falla la API
 
   const valorActual = activo.cantidad * precioActual;

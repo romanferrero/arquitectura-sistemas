@@ -10,6 +10,37 @@
   ],
   "item": [
     {
+      "name": "00 - Limpiar el portafolio",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Los datos persisten en MySQL: se borran los de corridas anteriores para que",
+              "// la coleccion se pueda ejecutar las veces que haga falta.",
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const base = pm.collectionVariables.get('baseUrl');",
+              "pm.response.json().forEach(a => pm.sendRequest({ url: base + '/api/activos/' + a.id, method: 'DELETE' }));"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "01 - Health check",
       "request": {
         "method": "GET",
