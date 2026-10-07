@@ -620,6 +620,151 @@
           }
         }
       ]
+    },
+    {
+      "name": "23 - Historial de un activo eliminado",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/{{idActivo}}/historial",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos",
+            "{{idActivo}}",
+            "historial"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const h = pm.response.json();",
+              "pm.test('3 registros del mas reciente al mas viejo', () => pm.expect(h.map(r => r.operacion)).to.eql(['ELIMINAR', 'ACTUALIZAR', 'CREAR']));",
+              "pm.test('ELIMINAR guarda como era el activo', () => pm.expect(h[0].antes.simbolo).to.eql('BTC'));",
+              "pm.test('ACTUALIZAR guarda antes, despues y que campos cambiaron', () => {",
+              "  pm.expect(h[1].antes.cantidad).to.eql(0.5);",
+              "  pm.expect(h[1].despues.cantidad).to.eql(1.25);",
+              "  pm.expect(h[1].camposModificados).to.include.members(['cantidad', 'precioCompra']);",
+              "});",
+              "pm.test('CREAR guarda el estado final', () => pm.expect(h[2].despues.simbolo).to.eql('BTC'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "24 - Listar la auditoria filtrando por ELIMINAR",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/auditoria?operacion=ELIMINAR&limite=5",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auditoria"
+          ],
+          "query": [
+            {
+              "key": "operacion",
+              "value": "ELIMINAR"
+            },
+            {
+              "key": "limite",
+              "value": "5"
+            }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const h = pm.response.json();",
+              "pm.test('hay resultados y respeta el limite', () => pm.expect(h.length).to.be.within(1, 5));",
+              "pm.test('todos son ELIMINAR', () => pm.expect(h.every(r => r.operacion === 'ELIMINAR')).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "25 - Error 400: parametros de auditoria invalidos",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/auditoria?operacion=BORRAR&limite=0",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auditoria"
+          ],
+          "query": [
+            {
+              "key": "operacion",
+              "value": "BORRAR"
+            },
+            {
+              "key": "limite",
+              "value": "0"
+            }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+              "pm.test('informa los dos errores', () => pm.expect(pm.response.json().error.detalles).to.have.lengthOf(2));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "26 - Error 404: historial de un id que nunca existio",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/no-existe/historial",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos",
+            "no-existe",
+            "historial"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+            ]
+          }
+        }
+      ]
     }
   ]
 }

@@ -8,7 +8,7 @@
 - [x] Sesión 3 — Pipeline de análisis y cierre de la Parte 3 (**Parte 3 en `main`**)
 - [x] Sesión 4 — Infraestructura de datos y migraciones
 - [x] Sesión 5 — Repositorio de activos sobre MySQL
-- [ ] Sesión 6 — Auditoría en MongoDB
+- [x] Sesión 6 — Auditoría en MongoDB
 - [ ] Sesión 7 — API en Compose y cierre
 
 El detalle de lo hecho en cada sesión está en [BITACORA.md](BITACORA.md).
