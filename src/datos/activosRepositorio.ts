@@ -1,5 +1,6 @@
 import { UniqueConstraintError } from "sequelize";
 import type { Activo } from "../modelos/activo.ts";
+import { sequelize } from "./conexiones.ts";
 import { filaAActivo, activoAFila } from "./mapeoActivo.ts";
 import { ActivoModelo } from "./modelos/activoModelo.ts";
 
@@ -54,11 +55,6 @@ export async function buscarPorId(id: string): Promise<Activo | undefined> {
   return fila === null ? undefined : filaAActivo(fila.toJSON());
 }
 
-export async function buscarPorSimbolo(simbolo: string): Promise<Activo | undefined> {
-  const fila = await ActivoModelo.findOne({ where: { simbolo } });
-  return fila === null ? undefined : filaAActivo(fila.toJSON());
-}
-
 /** Inserta el activo. Lanza SimboloDuplicadoError si el simbolo ya existe. */
 export async function guardar(activo: Activo): Promise<Activo> {
   try {
@@ -71,18 +67,31 @@ export async function guardar(activo: Activo): Promise<Activo> {
 }
 
 /**
- * Reemplaza el activo completo. Devuelve undefined si el id no existe y lanza
+ * Reemplaza el activo completo. Devuelve el activo como estaba JUSTO ANTES de
+ * reemplazarlo y como quedo, o undefined si el id no existe. Lanza
  * SimboloDuplicadoError si el nuevo simbolo ya lo tiene otro activo.
+ *
+ * Leer y escribir ocurren en una transaccion con la fila bloqueada (SELECT ... FOR
+ * UPDATE): si dos PUT llegan a la vez, el segundo espera al primero. Asi el "antes"
+ * que se devuelve es de verdad lo que se piso (y es lo que va a la auditoria), y no
+ * una lectura vieja de antes de que otro lo modificara.
  */
-export async function reemplazar(id: string, activo: Activo): Promise<Activo | undefined> {
-  const fila = await ActivoModelo.findByPk(id);
-  if (fila === null) return undefined;
-
+export async function reemplazar(
+  id: string,
+  activo: Activo,
+): Promise<{ antes: Activo; despues: Activo } | undefined> {
   try {
-    const { id: _id, ...valores } = activoAFila({ ...activo, id });
-    await fila.update(valores);
-    await fila.reload();
-    return filaAActivo(fila.toJSON());
+    return await sequelize.transaction(async (transaccion) => {
+      const fila = await ActivoModelo.findByPk(id, { transaction: transaccion, lock: transaccion.LOCK.UPDATE });
+      if (fila === null) return undefined;
+
+      const antes = filaAActivo(fila.toJSON());
+      // La fecha de alta nunca cambia: se conserva la que esta guardada.
+      const { id: _id, ...valores } = activoAFila({ ...activo, id, creadoEn: antes.creadoEn });
+      await fila.update(valores, { transaction: transaccion });
+      await fila.reload({ transaction: transaccion });
+      return { antes, despues: filaAActivo(fila.toJSON()) };
+    });
   } catch (error) {
     throw traducir(error, activo.simbolo);
   }
