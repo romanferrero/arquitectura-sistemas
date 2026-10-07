@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import { Sequelize } from "sequelize";
-import { env } from "../config/env.ts";
+import { env, mongoUri } from "../config/env.ts";
 
 /**
  * Conexiones a las dos bases. Este es el unico archivo que sabe como se llega
@@ -24,7 +24,7 @@ export async function conectarMysql(): Promise<void> {
 
 /** Abre la conexion con MongoDB. Falla en 5 s si no encuentra el servidor. */
 export async function conectarMongo(): Promise<void> {
-  await mongoose.connect(env.MONGO_URI, { serverSelectionTimeoutMS: 5_000 });
+  await mongoose.connect(mongoUri(), { serverSelectionTimeoutMS: 5_000 });
 }
 
 /** Cierra ambas conexiones, aunque una de las dos falle al cerrarse. */

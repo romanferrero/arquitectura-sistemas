@@ -1,5 +1,5 @@
 import { app } from "./app.ts";
-import { env } from "./config/env.ts";
+import { env, mongoUri } from "./config/env.ts";
 import { logger } from "./config/logger.ts";
 import { cerrarConexiones, conectarMongo, conectarMysql } from "./datos/conexiones.ts";
 import { describirError } from "./datos/describirError.ts";
@@ -19,6 +19,7 @@ import { migrar } from "./datos/migrar.ts";
  * arrancando a la vez convendria un paso de migracion aparte.
  */
 async function arrancar(): Promise<void> {
+  mongoUri(); // valida la configuracion de Mongo antes de abrir ninguna conexion (fail fast)
   await conectarMysql();
   logger.info("MySQL conectado");
 
@@ -39,7 +40,10 @@ async function arrancar(): Promise<void> {
 
   // Cierre ordenado: deja de aceptar pedidos, espera los que estan en curso y
   // recien despues cierra las conexiones a las bases.
+  let cerrando = false;
   const cerrar = (senal: string): void => {
+    if (cerrando) return; // una segunda senal no reinicia el cierre que ya esta en curso
+    cerrando = true;
     logger.info(`${senal} recibida: cerrando la API`);
     setTimeout(() => process.exit(1), 10_000).unref(); // si algo se cuelga, no esperar para siempre
     servidor.close(() => {
