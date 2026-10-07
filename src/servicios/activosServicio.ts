@@ -2,12 +2,16 @@ import { randomUUID } from "node:crypto";
 import * as repositorio from "../datos/activosRepositorio.ts";
 import { ErrorApi } from "../errores/ErrorApi.ts";
 import type { Activo, ActivoConPrecio } from "../modelos/activo.ts";
+import type { RegistroAuditoria } from "../modelos/auditoria.ts";
+import type { ConversionMoneda } from "../pipeline/ingesta/tipos.ts";
 import { crearPipelineIngesta } from "../pipeline/ingesta/pipelineIngesta.ts";
 import { obtenerPrecio } from "./preciosServicio.ts";
 import { obtenerTasaAUsd } from "./tasasServicio.ts";
 import { env } from "../config/env.ts";
 import { registradorDe } from "../config/logger.ts";
+import { camposModificados } from "../utilidades/camposModificados.ts";
 import { redondear } from "../utilidades/redondear.ts";
+import { auditoria } from "./auditoriaServicio.ts";
 
 /**
  * Reglas de negocio del CRUD. Esta capa no conoce `req` ni `res`.
@@ -34,16 +38,27 @@ export async function obtenerActivo(id: string): Promise<Activo> {
   return activo;
 }
 
+// Campos del activo que el cliente puede cambiar; sirven para decir que se modifico.
+const CAMPOS_EDITABLES = ["simbolo", "nombre", "cantidad", "precioCompra"] as const;
+
+/** Lo que va a `metadatos` en el registro de auditoria: origen y, si hubo, la conversion de moneda. */
+function metadatosDe(conversion: ConversionMoneda | undefined): Record<string, unknown> {
+  return conversion === undefined
+    ? { origen: "API" }
+    : { origen: "API", conversionMoneda: conversion };
+}
+
 // Es async porque el pipeline puede consultar la API de tasas de cambio.
 export async function crearActivo(cuerpo: unknown): Promise<Activo> {
-  const { datos } = await pipelineIngesta.ejecutar(cuerpo); // 400 / 502 si falla un filtro
+  const { datos, conversion } = await pipelineIngesta.ejecutar(cuerpo); // 400 / 502 si falla un filtro
 
   // Regla de negocio: una sola posicion por simbolo en el portafolio. La hace
   // cumplir la restriccion UNIQUE de la base: no se busca antes, porque dos
   // pedidos simultaneos podrian pasar esa comprobacion a la vez.
   const ahora = new Date().toISOString();
+  let creado: Activo;
   try {
-    return await repositorio.guardar({
+    creado = await repositorio.guardar({
       id: randomUUID(),
       ...datos,
       creadoEn: ahora,
@@ -55,12 +70,21 @@ export async function crearActivo(cuerpo: unknown): Promise<Activo> {
     }
     throw error;
   }
+
+  // MySQL ya confirmo: la auditoria es de mejor esfuerzo y no hace fallar la operacion.
+  await auditoria.registrar({
+    operacion: "CREAR",
+    entidadId: creado.id,
+    despues: creado,
+    metadatos: metadatosDe(conversion),
+  });
+  return creado;
 }
 
 export async function actualizarActivo(id: string, cuerpo: unknown): Promise<Activo> {
   await obtenerActivo(id); // 404 enseguida si no existe, sin gastar el pipeline
 
-  const { datos } = await pipelineIngesta.ejecutar(cuerpo); // 400 / 502 si falla un filtro
+  const { datos, conversion } = await pipelineIngesta.ejecutar(cuerpo); // 400 / 502 si falla un filtro
 
   // Se vuelve a leer: mientras el pipeline esperaba a la API de tasas el activo
   // pudo borrarse o modificarse, y no hay que pisarlo con datos viejos.
@@ -75,24 +99,49 @@ export async function actualizarActivo(id: string, cuerpo: unknown): Promise<Act
 
   // El simbolo puede cambiar, pero no puede pisar al de OTRO activo: lo
   // garantiza la restriccion UNIQUE de la base.
+  let guardado: Activo | undefined;
   try {
-    const guardado = await repositorio.reemplazar(id, actualizado);
-    if (guardado === undefined) {
-      throw new ErrorApi(404, `No existe un activo con id ${id}`); // se borro mientras tanto
-    }
-    return guardado; // lo que quedo en la base, no lo que se intento guardar
+    guardado = await repositorio.reemplazar(id, actualizado);
   } catch (error) {
     if (error instanceof repositorio.SimboloDuplicadoError) {
       throw new ErrorApi(409, `Ya existe otro activo con el símbolo ${datos.simbolo}`);
     }
     throw error;
   }
+  if (guardado === undefined) {
+    throw new ErrorApi(404, `No existe un activo con id ${id}`); // se borro mientras tanto
+  }
+
+  // `guardado` es lo que quedo en la base, no lo que se intento guardar.
+  await auditoria.registrar({
+    operacion: "ACTUALIZAR",
+    entidadId: guardado.id,
+    antes: actual,
+    despues: guardado,
+    camposModificados: camposModificados(actual, guardado, CAMPOS_EDITABLES),
+    metadatos: metadatosDe(conversion),
+  });
+  return guardado;
 }
 
 export async function eliminarActivo(id: string): Promise<void> {
+  // Se lee antes de borrar: el historial tiene que guardar como era el activo.
+  const actual = await obtenerActivo(id);
   if (!(await repositorio.eliminar(id))) {
-    throw new ErrorApi(404, `No existe un activo con id ${id}`);
+    throw new ErrorApi(404, `No existe un activo con id ${id}`); // lo borro otro mientras tanto
   }
+  await auditoria.registrar({ operacion: "ELIMINAR", entidadId: id, antes: actual, metadatos: { origen: "API" } });
+}
+
+/**
+ * Historial de un activo. Funciona aunque el activo ya se haya eliminado (el
+ * historial es justamente lo que queda). Si no hay registros y el activo
+ * tampoco existe, el id es desconocido: 404.
+ */
+export async function historialDeActivo(id: string): Promise<RegistroAuditoria[]> {
+  const registros = await auditoria.historialDe(id);
+  if (registros.length === 0) await obtenerActivo(id); // lanza 404 si no existe
+  return registros;
 }
 
 /**
