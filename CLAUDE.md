@@ -9,6 +9,8 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
 - Al empezar una sesión: leer `PLAN.md` (sección Estado) y la última entrada de `BITACORA.md`.
 - Al cerrar una sesión: marcar el avance en `PLAN.md` y agregar una entrada en
   `BITACORA.md` (modelo, esfuerzo, modo, skills, decisiones y quién las tomó, verificación).
+- **Toda skill que se use (`/code-review`, `/security-review`, etc.) se anota**, tanto en la entrada de la sesión
+  como en la tabla "Resumen: skills y herramientas usadas" al principio de `BITACORA.md`.
 - La app tiene que quedar funcionando al final de cada sesión.
 
 ## Git (GitFlow)
