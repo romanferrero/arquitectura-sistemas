@@ -351,3 +351,62 @@ verifica. Ahora el orden incorrecto falla al compilar.
   detenerlos; los datos se conservan).
 - La imagen de la API todavía no se conecta a las bases: eso llega con la sesión 5 y el
   servicio `api` del compose en la sesión 7.
+
+---
+
+## Sesión 5 — Repositorio de activos sobre MySQL · 2026-10-07
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el confirmado por el estudiante).
+- **Modo:** implementación, en `feature/sesion-5-repositorio-mysql`.
+- **Herramientas:** edición de archivos, Docker (bases e imagen), Newman, `curl`, scripts
+  descartables. Sin skills ni subagentes.
+
+**Qué se hizo**
+- [src/datos/activosRepositorio.ts](src/datos/activosRepositorio.ts) reescrito sobre Sequelize: mismas
+  funciones, ahora asíncronas. El filtro `?simbolo=` es un `WHERE`. Todo lo que devuelve está
+  **releído de la base** tras escribir.
+- [src/datos/mapeoActivo.ts](src/datos/mapeoActivo.ts): fila ↔ `Activo` en funciones puras.
+- Servicio y controlador: solo `async`/`await`, más lo que cambia por la base (ver decisiones).
+- [src/servidor.ts](src/servidor.ts): conecta MySQL → migra → conecta Mongo → escucha; si algo falla no
+  levanta. Cierre ordenado con SIGTERM/SIGINT.
+- [src/modelos/limites.ts](src/modelos/limites.ts): rangos que entran en las columnas, aplicados en la
+  validación y en la conversión de moneda.
+- Postman: request `00 - Limpiar el portafolio` (los datos ahora persisten).
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| El símbolo único lo hace cumplir la restricción `UNIQUE`; se quitó la búsqueda previa | Claude | "Buscar y después guardar" no es seguro con una base real: 5 `POST` simultáneos del mismo símbolo → 1 da 201 y 4 dan 409 |
+| El repositorio lanza `SimboloDuplicadoError` (no `ErrorApi`); el servicio lo traduce a 409 | Claude, **cambia el plan** | El repositorio no conoce HTTP; el plan decía que lanzara `ErrorApi` directo |
+| Releer la fila tras escribir | Claude (según el plan) | MySQL redondea los `DECIMAL`: `98.456` se guarda `98.46` y el POST tiene que decir lo mismo que el GET |
+| Rangos numéricos validados (cantidad 1e-8…1e15, precio 0.01…1e15) | Claude | `cantidad: 1e-9` se redondea a 0, viola el `CHECK` y daba 500 |
+| `actualizarActivo` relee el activo tras el pipeline y trata `reemplazar` → `undefined` como 404 | Claude | Sigue cubriendo el borrado concurrente (ahora con base real) |
+| El request de limpieza de Postman se adelantó de la sesión 7 a esta | Claude | Sin él la colección no se puede correr dos veces |
+| Se fijaron `@emnapi/core` y `@emnapi/runtime` como devDependencies | Claude | Ver hallazgo del build de Docker |
+
+**Hallazgo: la imagen de Docker no se podía construir.** `npm ci` fallaba con "Missing:
+@emnapi/core from lock file": Jest arrastra un binario WASM opcional (`unrs-resolver`) que npm en
+Windows no registra en el lock. Es un problema que ya existía desde la sesión 1 (Jest) y no se había
+visto porque nunca se había construido la imagen después. Se arregló fijando esas dos dependencias; `npm
+ci` limpio pasa y `docker build` termina bien.
+
+**Verificación**
+- `npm run check` sin errores; `npm test`: 12 suites, 131 tests en verde (11 nuevos: mapeo y límites).
+- Persistencia: un activo creado sigue ahí tras reiniciar la API; también está en MySQL (`SELECT`).
+- Consistencia: `POST` con `precioCompra: 98.456` y `cantidad: 0.123456789` responde `98.46` y
+  `0.12345679`, igual que el `GET` siguiente y que la fila.
+- Newman **dos corridas seguidas**: 0 fallas, 45 aserciones (la limpieza funciona).
+- Casos solo posibles con base real: carrera de 5 `POST` (1×201, 4×409); límites → 400 y nunca 500; `PUT`
+  con símbolo ajeno → 409, `PUT` conserva `creadoEn`; 0 errores no controlados en el log.
+- Arranque con MongoDB caído → "MongooseServerSelectionError" y exit 1 (tarda ~12 s); con MySQL caído →
+  "SequelizeConnectionRefusedError: ECONNREFUSED" y exit 1.
+- **Imagen de Docker en Linux**: contra las bases del host, conecta, migra, responde y `docker stop`
+  (SIGTERM real) la cierra en 1 s con código 0. Con el `.env` local falla con `ECONNREFUSED`, como se esperaba.
+
+**Pendientes / a tener en cuenta**
+- En Windows `kill -INT` no entrega la señal; el cierre se verificó disparando el evento dentro del proceso
+  y, ya con señal real, en el contenedor.
+- El servicio `api` dentro del compose (con `MYSQL_HOST=mysql`) queda para la sesión 7.
+- Un fallo de Mongo al arrancar corta la API; en la sesión 6 una caída en *ejecución* no debe cortar las
+  operaciones.
