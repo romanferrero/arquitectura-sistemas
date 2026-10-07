@@ -505,3 +505,28 @@ TCP. El mismo defecto está en el compose del ejemplo del profesor.
 
 **Pendientes**
 - `/code-review` y `/security-review` de la Parte 4 y, con el OK del estudiante, merge a `main`.
+
+---
+
+## Revisión de código de la Parte 4 · 2026-10-07
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
+- **Skill usada:** `/code-review` en nivel *high* sobre lo que `develop` tenía de más que `main` (sesiones 4 a 7).
+  Devolvió 9 hallazgos; se evaluaron uno por uno, en `fix/revision-parte-4`.
+
+| # | Hallazgo | Decisión |
+|---|---|---|
+| 1 | El healthcheck de Mongo no se autentica: el `mongod` temporal de la inicialización (sin auth) respondería "sano" | **Corregido.** Es el mismo defecto que ya se había arreglado en MySQL. Un cliente anónimo recibe `Unauthorized`, o sea que el ping anónimo no probaba nada |
+| 2 | `PUT` lee-modifica-escribe sin transacción: el `antes` auditado puede no ser lo que se reemplazó | **Corregido:** transacción con `SELECT ... FOR UPDATE`; el repositorio devuelve el `antes` real |
+| 3 | `registrar` espera hasta 2 s a Mongo dentro de la petición | **No se corrige.** Es el compromiso elegido y documentado: esperar da orden y una garantía mayor de registro; fire-and-forget evitaría la demora pero perdería registros sin que nadie lo note |
+| 4 | El historial da 404 o `[]` según lo que haya en cada base | **No se corrige.** Es inherente al mejor esfuerzo: si la auditoría se perdió, el historial de ese activo queda incompleto |
+| 5 | El cierre ordenado no es idempotente | **Corregido** (bandera `cerrando`) |
+| 6 | `buscarPorSimbolo` quedó sin uso | **Corregido** (se borró) |
+| 7 | `MONGO_URI` se arma al importar `env`: `migrar` exigía variables de Mongo | **Corregido:** pasó a una función `mongoUri()` que el servidor llama al arrancar |
+| 8 | El logger de Umzug mapeaba `warn` a `info` y podía imprimir `undefined` | **Corregido** |
+| 9 | Los rangos numéricos están repartidos en migración, `limites.ts` y el filtro; un error de base da 500 | **No se corrige.** Ya validado y documentado; la duplicación es el precio de rechazar con 400 antes de llegar a la base |
+| 10 | `?limite=1&limite=2` se ignoraba en silencio | **Corregido:** da 400 |
+
+**Verificación:** 158 tests y `check` en verde; tres arranques desde cero con el healthcheck de Mongo nuevo
+(0 reinicios de la API); 6 `PUT` simultáneos con una cadena de auditoría consistente; `migrar:estado` sin
+ninguna variable de Mongo; parámetros repetidos → 400; tres señales seguidas → un solo cierre.

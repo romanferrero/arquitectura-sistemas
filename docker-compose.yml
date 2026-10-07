@@ -71,8 +71,13 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
     volumes:
       - mongodb_data:/data/db
+    # Se autentica con el usuario root: al crear un volumen nuevo la imagen arranca primero
+    # un mongod temporal SIN autenticacion, que responderia "sano" a un ping anonimo antes de
+    # que exista el usuario. Con credenciales, solo el servidor definitivo pasa la prueba.
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "quit(db.runCommand({ ping: 1 }).ok ? 0 : 2)"]
+      test:
+        - CMD-SHELL
+        - 'mongosh --quiet -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --eval "quit(db.runCommand({ ping: 1 }).ok ? 0 : 2)"'
       interval: 5s
       timeout: 5s
       retries: 20

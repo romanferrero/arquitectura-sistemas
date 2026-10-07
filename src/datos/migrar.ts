@@ -18,12 +18,19 @@ const umzug = new Umzug<QueryInterface>({
   context: sequelize.getQueryInterface(),
   storage: new SequelizeStorage({ sequelize, tableName: "migraciones" }),
   logger: {
-    info: (evento) => logger.info(`Migración ${String(evento["event"])}: ${String(evento["name"])}`),
-    warn: (evento) => logger.info(`Migración (aviso): ${JSON.stringify(evento)}`),
-    error: (evento) => logger.error(`Migración: ${JSON.stringify(evento)}`),
+    info: (evento) => logger.info(describirEvento(evento)),
+    warn: (evento) => logger.warn(describirEvento(evento)),
+    error: (evento) => logger.error(describirEvento(evento)),
     debug: () => undefined,
   },
 });
+
+/** Los eventos de Umzug traen `event` y `name`; si falta alguno se muestra el evento entero. */
+function describirEvento(evento: Record<string, unknown>): string {
+  return typeof evento["event"] === "string" && typeof evento["name"] === "string"
+    ? `Migración ${evento["event"]}: ${evento["name"]}`
+    : `Migración: ${JSON.stringify(evento)}`;
+}
 
 /** Aplica todas las migraciones pendientes. Devuelve los nombres de las aplicadas. */
 export async function migrar(): Promise<string[]> {

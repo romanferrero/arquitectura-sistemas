@@ -40,12 +40,15 @@ function numeroNoNegativoRequerido(nombre: string): number {
 }
 
 /**
- * URI de MongoDB. `authSource=admin` es necesario porque el usuario root del
+ * URI de MongoDB. Es una FUNCION y no una propiedad de `env`: asi los comandos que solo
+ * usan MySQL (migrar, por ejemplo) no exigen tener configurado MongoDB. El servidor la
+ * llama al arrancar, antes de conectar nada, para fallar rapido si falta algo.
+ * `authSource=admin` es necesario porque el usuario root del
  * contenedor se crea en la base `admin`, aunque los datos vivan en otra.
  * `directConnection=true` evita que el driver intente descubrir un replica set.
  * Usuario y password se codifican por si traen caracteres reservados (@, :, /).
  */
-function construirMongoUri(): string {
+export function mongoUri(): string {
   const usuario = encodeURIComponent(textoRequerido("MONGO_INITDB_ROOT_USERNAME"));
   const password = encodeURIComponent(textoRequerido("MONGO_INITDB_ROOT_PASSWORD"));
   const host = textoRequerido("MONGO_HOST");
@@ -68,5 +71,4 @@ export const env = Object.freeze({
   MYSQL_DATABASE: textoRequerido("MYSQL_DATABASE"),
   MYSQL_USER: textoRequerido("MYSQL_USER"),
   MYSQL_PASSWORD: textoRequerido("MYSQL_PASSWORD"),
-  MONGO_URI: construirMongoUri(),
 });

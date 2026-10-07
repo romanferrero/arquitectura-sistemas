@@ -82,13 +82,9 @@ export async function crearActivo(cuerpo: unknown): Promise<Activo> {
 }
 
 export async function actualizarActivo(id: string, cuerpo: unknown): Promise<Activo> {
-  await obtenerActivo(id); // 404 enseguida si no existe, sin gastar el pipeline
+  const actual = await obtenerActivo(id); // 404 enseguida si no existe, sin gastar el pipeline
 
   const { datos, conversion } = await pipelineIngesta.ejecutar(cuerpo); // 400 / 502 si falla un filtro
-
-  // Se vuelve a leer: mientras el pipeline esperaba a la API de tasas el activo
-  // pudo borrarse o modificarse, y no hay que pisarlo con datos viejos.
-  const actual = await obtenerActivo(id);
 
   const actualizado: Activo = {
     id: actual.id, // el id nunca cambia, aunque venga en el body
@@ -99,29 +95,32 @@ export async function actualizarActivo(id: string, cuerpo: unknown): Promise<Act
 
   // El simbolo puede cambiar, pero no puede pisar al de OTRO activo: lo
   // garantiza la restriccion UNIQUE de la base.
-  let guardado: Activo | undefined;
+  let reemplazo: { antes: Activo; despues: Activo } | undefined;
   try {
-    guardado = await repositorio.reemplazar(id, actualizado);
+    // Mientras el pipeline esperaba a la API de tasas el activo pudo borrarse o
+    // cambiar: el repositorio relee y bloquea la fila, y devuelve el "antes" real.
+    reemplazo = await repositorio.reemplazar(id, actualizado);
   } catch (error) {
     if (error instanceof repositorio.SimboloDuplicadoError) {
       throw new ErrorApi(409, `Ya existe otro activo con el símbolo ${datos.simbolo}`);
     }
     throw error;
   }
-  if (guardado === undefined) {
+  if (reemplazo === undefined) {
     throw new ErrorApi(404, `No existe un activo con id ${id}`); // se borro mientras tanto
   }
 
-  // `guardado` es lo que quedo en la base, no lo que se intento guardar.
+  // `despues` es lo que quedo en la base, no lo que se intento guardar.
+  const { antes, despues } = reemplazo;
   await auditoria.registrar({
     operacion: "ACTUALIZAR",
-    entidadId: guardado.id,
-    antes: actual,
-    despues: guardado,
-    camposModificados: camposModificados(actual, guardado, CAMPOS_EDITABLES),
+    entidadId: despues.id,
+    antes,
+    despues,
+    camposModificados: camposModificados(antes, despues, CAMPOS_EDITABLES),
     metadatos: metadatosDe(conversion),
   });
-  return guardado;
+  return despues;
 }
 
 export async function eliminarActivo(id: string): Promise<void> {
