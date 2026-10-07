@@ -13,7 +13,7 @@ nuevos y otro de análisis de riesgo para lotes.
 
 - Node.js **22 o superior** (probado en v24.11). Se necesita esa versión para el flag
   nativo `--env-file` y para ejecutar archivos `.ts` sin compilar.
-- Docker (opcional, solo para levantar el contenedor).
+- Docker con Compose v2 (`docker compose`), para levantar MySQL y MongoDB.
 
 ---
 
@@ -35,6 +35,10 @@ cp .env.example .env      # en Windows: copy .env.example .env
 | `npm start` | Ejecuta la versión compilada |
 | `npm run check` | Verifica los tipos de `src/` y `pruebas/` sin generar archivos |
 | `npm test` | Corre los tests con Jest |
+| `npm run migrar` | Aplica las migraciones pendientes de MySQL |
+| `npm run migrar:deshacer` | Deshace la última migración aplicada |
+| `npm run migrar:estado` | Lista las migraciones aplicadas y las pendientes |
+| `npm run db:verificar` | Comprueba que MySQL y MongoDB respondan con la configuración del `.env` |
 
 Los comandos son, en realidad:
 
@@ -46,6 +50,58 @@ node --experimental-vm-modules node_modules/jest/bin/jest.js   # test
 ```
 
 La API queda disponible en `http://localhost:3000`.
+
+---
+
+## Bases de datos
+
+El proyecto usa dos motores, cada uno para lo que mejor hace: **MySQL** (vía Sequelize) para
+la entidad `Activo`, que tiene estructura fija y reglas de integridad, y **MongoDB** (vía
+Mongoose) para la auditoría, que crece rápido y no necesita un esquema rígido.
+
+```bash
+docker compose up -d --wait     # levanta MySQL 8.4 y MongoDB 8.0 y espera a que estén healthy
+npm run migrar                  # crea las tablas de MySQL
+npm run db:verificar            # comprueba que la app llega a las dos bases
+```
+
+| Comando de Docker | Qué hace |
+|---|---|
+| `docker compose ps` | Estado de los contenedores |
+| `docker compose stop` / `start` | Detiene / reanuda, conservando los datos |
+| `docker compose down` | Elimina los contenedores, **conserva** los datos (están en volúmenes) |
+| `docker compose down -v` | Elimina también los volúmenes: **borra todos los datos** |
+
+Las credenciales y los puertos salen del `.env` (ver [`.env.example`](.env.example)), que lee
+tanto Compose como la aplicación. Son credenciales de **desarrollo local**; los puertos se
+publican solo en `127.0.0.1`.
+
+> **Puerto ocupado:** si en tu máquina ya hay un MySQL o un MongoDB local en `3306` o
+> `27017`, cambiá `MYSQL_PORT` o `MONGO_PORT` en el `.env` (por ejemplo `27018`) y volvé a
+> levantar. Solo cambia el puerto del host; el del contenedor sigue siendo el mismo.
+
+### Migraciones
+
+El esquema de MySQL **solo cambia por migraciones** versionadas (con [Umzug](https://github.com/sequelize/umzug)),
+nunca con `sync()`. Cada una tiene `up` (aplica) y `down` (deshace), y la lista vive en
+[`src/datos/migraciones/index.ts`](src/datos/migraciones/index.ts). Umzug anota las ya
+aplicadas en la tabla `migraciones`, así `npm run migrar` solo corre las que faltan y se
+puede ejecutar las veces que haga falta.
+
+### Tabla `activos`
+
+| Columna | Tipo | Regla |
+|---|---|---|
+| `id` | `CHAR(36)` | Clave primaria (el UUID que genera el servidor) |
+| `simbolo` | `VARCHAR(10)` | No nulo, **único** |
+| `nombre` | `VARCHAR(50)` | No nulo |
+| `cantidad` | `DECIMAL(24,8)` | No nulo, **mayor a 0** (`CHECK`) |
+| `precio_compra` | `DECIMAL(20,2)` | No nulo, **mayor a 0** (`CHECK`) |
+| `creado_en`, `actualizado_en` | `DATETIME(3)` | No nulos |
+
+Las reglas están también en la base y no solo en el código: aunque otra aplicación escriba
+directo en la tabla, MySQL rechaza un símbolo repetido o una cantidad que no sea positiva.
+Se usa `DECIMAL` y no `FLOAT` para no arrastrar errores de redondeo con dinero.
 
 ---
 
@@ -81,6 +137,12 @@ Se cargan con el flag **nativo** de Node `--env-file`, sin usar la librería `do
 | `API_TASAS_URL` | `https://open.er-api.com/v6/latest` | Endpoint de tipo de cambio (se consulta como `<URL>/<MONEDA>`) |
 | `MONEDA` | `usd` | Moneda de las cotizaciones |
 | `TIMEOUT_MS` | `5000` | Timeout de las llamadas externas |
+| `MYSQL_HOST`, `MYSQL_PORT` | `localhost`, `3306` | Dónde está MySQL |
+| `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` | `crypto_db`, `crypto_user`, … | Base y credenciales de la aplicación |
+| `MYSQL_ROOT_PASSWORD` | — | Solo la usa Docker Compose al crear el contenedor |
+| `MONGO_HOST`, `MONGO_PORT` | `localhost`, `27017` | Dónde está MongoDB |
+| `MONGO_DATABASE` | `crypto_db` | Base donde se guarda la auditoría |
+| `MONGO_INITDB_ROOT_USERNAME`, `MONGO_INITDB_ROOT_PASSWORD` | `mongo_root`, … | Usuario con el que se conecta la aplicación |
 | `UMBRAL_MONTO_USD` | `100000` | Monto (en USD) que, superado, dispara la *Whale Alert*. Admite 0 |
 | `UMBRAL_VOLATILIDAD` | `80` | Volatilidad (en %) que, superada, marca un activo como `high_risk` |
 
@@ -318,7 +380,12 @@ src/
 │   ├── env.ts                     # único archivo que lee process.env
 │   └── logger.ts                  # logger Winston
 ├── modelos/activo.ts              # tipos del dominio
-├── datos/activosRepositorio.ts    # el array en memoria (único estado)
+├── datos/
+│   ├── activosRepositorio.ts      # el array en memoria (único estado, por ahora)
+│   ├── conexiones.ts              # conexión a MySQL (Sequelize) y MongoDB (Mongoose)
+│   ├── modelos/activoModelo.ts    # modelo Sequelize de la tabla activos
+│   ├── migraciones/               # cambios de esquema versionados (up / down)
+│   └── migrar.ts, migrarCli.ts    # ejecutor de migraciones (Umzug) y su comando
 ├── pipeline/
 │   ├── pipeline.ts                # runner genérico: Filtro y Pipeline
 │   ├── ingesta/                   # validación → normalización → conversión de moneda
