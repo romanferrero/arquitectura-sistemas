@@ -4,6 +4,26 @@ Registro de cómo se trabaja el ejercicio entre el estudiante y Claude Code: qu�
 esfuerzo se usó en cada sesión, qué se decidió, quién lo decidió y cómo se verificó.
 El plan completo está en [PLAN.md](PLAN.md).
 
+## Resumen: skills y herramientas usadas
+
+Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron tres veces,
+siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUDE.md`).
+
+| Skill | Cuándo | Para qué | Resultado |
+|---|---|---|---|
+| `/code-review` (nivel *high*) | Cierre de la Parte 3 | Revisar lo que `develop` tenía de más que `main` | 9 hallazgos: 7 corregidos y 2 documentados |
+| `/code-review` (nivel *high*) | Cierre de la Parte 4 | Ídem, sobre las sesiones 4 a 7 | 10 hallazgos: 7 corregidos y 3 documentados |
+| `/security-review` | Cierre de la Parte 4 | Buscar vulnerabilidades en los cambios | Sin vulnerabilidades de alta confianza |
+
+Las tres corren en un subproceso aparte (no comparten el contexto de la sesión). En el resto de las sesiones no se
+usó ninguna skill.
+
+Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
+correr la colección de Postman, **Docker Compose**, **Jest** y pruebas de mutación hechas a mano.
+
+Los modelos usados: Opus 5.5 en la planificación (sesión 0) y Sonnet 5.5 en la implementación (sesiones 1 a 7 y las
+revisiones), siempre con esfuerzo alto.
+
 ---
 
 ## Sesión 0 — Planificación · 2026-10-05
@@ -239,7 +259,7 @@ verifica. Ahora el orden incorrecto falla al compilar.
 - **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (confirmado por el estudiante).
 - **Modo:** revisión y correcciones, en `fix/revision-parte-3`.
 - **Skill usada:** `/code-review` en nivel *high*, sobre todo lo que `develop` tenía de más
-  que `main` (las sesiones 1 a 3 completas). Se ejecutó en un subproceso y devolvió 8
+  que `main` (las sesiones 1 a 3 completas). Se ejecutó en un subproceso y devolvió 9
   hallazgos, que se evaluaron uno por uno.
 
 **Hallazgos y decisión**
@@ -280,3 +300,276 @@ verifica. Ahora el orden incorrecto falla al compilar.
 - **Siguiente:** sesión 4 (infraestructura de datos y migraciones), en una rama
   `feature/sesion-4-*` desde `develop`. Docker Desktop estaba apagado en la planificación:
   hay que prenderlo antes de empezar.
+
+---
+
+## Sesión 4 — Infraestructura de datos y migraciones · 2026-10-07
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el confirmado por el estudiante).
+- **Modo:** implementación, en `feature/sesion-4-infraestructura-datos`.
+- **Herramientas:** edición de archivos, Docker Compose (Claude lanzó Docker Desktop, que
+  estaba apagado), el cliente `mysql` dentro del contenedor para probar las restricciones, y
+  scripts descartables en el scratchpad. Sin skills ni subagentes.
+
+**Qué se hizo**
+- [docker-compose.yml](docker-compose.yml): MySQL 8.4 y MongoDB 8.0 tomados del ejemplo de
+  `Contextos/` (versiones fijadas, healthchecks, volúmenes, puertos solo en 127.0.0.1).
+- `.env` y `.env.example`: variables de ambas bases; el mismo archivo lo leen Compose y la app.
+- `config/env.ts`: valida las variables nuevas (fail fast) y arma la URI de Mongo
+  (`authSource=admin`, `directConnection=true`, usuario y password codificados).
+- [src/datos/conexiones.ts](src/datos/conexiones.ts): Sequelize y Mongoose.
+- [src/datos/modelos/activoModelo.ts](src/datos/modelos/activoModelo.ts): modelo de `activos`,
+  con `precioCompra` mapeado a `precio_compra`.
+- [src/datos/migraciones/](src/datos/migraciones/): `001-crear-activos` (tabla, símbolo único y
+  dos `CHECK` de valores positivos) y la lista explícita; ejecutor con **Umzug** y comando.
+- Scripts `migrar`, `migrar:deshacer`, `migrar:estado` y `db:verificar`.
+- README: sección "Bases de datos", variables, comandos y estructura.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| El contenedor de Mongo sale por el puerto **27018** en el `.env` local | Claude | Hay un MongoDB de Windows (servicio `MongoDB`) corriendo en 27017; no se lo toca porque puede ser de otro proyecto. `.env.example` conserva 27017 |
+| Comentarios del `.env` en línea aparte, no al final de la línea | Claude | Node y Compose los interpretan distinto según la versión |
+| `name: portafolio-cripto` en el compose | Claude | Volúmenes y contenedores con nombre propio y no el de la carpeta |
+| Migración autocontenida: no importa el modelo | Claude | Una migración describe el esquema de su momento; el modelo cambia después |
+| `CHECK` por SQL directo | Claude | Es la forma explícita en MySQL 8 y el error de la base es claro |
+| Longitudes `simbolo` 10 y `nombre` 50 (el ejemplo usaba 15 y 100) | Claude | Coinciden con las reglas de validación de la API |
+| `DECIMAL(24,8)` y `DECIMAL(20,2)`, collation `utf8mb4_0900_ai_ci` | Del ejemplo | Dinero sin `FLOAT`; el símbolo único no distingue mayúsculas |
+| Se agregaron `migrar:estado` y `db:verificar` (no estaban en el plan) | Claude | Permiten probar Mongo antes de la sesión 6 y distinguir "no llega a la base" de "bug de la app" |
+| Helper `describirError` | Claude | Los errores de conexión de Sequelize llegan con `message` vacío (se vio al probar con el puerto equivocado) |
+| `umzug` y `sequelize` con avisos de `npm audit` | Claude, **a validar** | Ver pendientes |
+
+**Verificación**
+- `npm run check` sin errores; `npm test`: 11 suites, 120 tests en verde (15 nuevos: lista de
+  migraciones, migración 001 contra un `QueryInterface` falso y `describirError`).
+- Mutación: cambiar `> 0` por `>= 0` en un `CHECK` → un test falla.
+- `docker compose up -d --wait`: MySQL y MongoDB `healthy`. `db:verificar`: MySQL 8.4.11 y
+  MongoDB responden.
+- `migrar` crea `activos` y `migraciones`; repetirlo dice "no hay pendientes";
+  `migrar:deshacer` borra la tabla; `migrar` la recrea. También funciona desde `dist/`.
+- **MySQL hace cumplir las reglas**, probado con inserts a mano: símbolo duplicado (incluso en
+  minúscula) → error 1062; cantidad 0 → error 3819; precio negativo → error 3819.
+- El modelo de Sequelize crea y lee filas: DECIMAL como texto, fechas como `Date`, mapeo de
+  `precio_compra` a `precioCompra`.
+- Caminos de error: MySQL en un puerto equivocado → `SequelizeConnectionRefusedError:
+  ECONNREFUSED`, exit 1; la app contra el MongoDB de Windows → "Authentication failed"; falta
+  una variable → corta el arranque nombrándola.
+
+**Hallazgos y pendientes**
+- **Redondeo silencioso de MySQL:** `precioCompra: 98.456` se guardó como `98.46`. Si el
+  repositorio devolviera lo que recibió, el POST diría 98.456 y el GET siguiente 98.46.
+  Se resuelve en la sesión 5 (releer la fila tras escribir); quedó anotado en `PLAN.md`.
+- **`npm audit --omit=dev` pasó de 0 a 6 avisos moderados**, todos transitivos: `umzug` →
+  `@rushstack/ts-command-line` → `sprintf-js` (solo afecta su herramienta de línea de comandos,
+  que no usamos) y `sequelize` 6 → `uuid` < 11 (el aviso es sobre un parámetro `buf` que
+  Sequelize no usa). Los arreglos que propone npm instalan versiones de hace años, así que no se
+  aplicaron. Sequelize 6.37.8 es la misma versión que fija el ejemplo del profesor.
+- El `.env.example` trae credenciales de desarrollo local tomadas del ejemplo; no deben usarse
+  fuera de la máquina local.
+- Los contenedores quedan corriendo al cerrar la sesión (`docker compose stop` para
+  detenerlos; los datos se conservan).
+- La imagen de la API todavía no se conecta a las bases: eso llega con la sesión 5 y el
+  servicio `api` del compose en la sesión 7.
+
+---
+
+## Sesión 5 — Repositorio de activos sobre MySQL · 2026-10-07
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el confirmado por el estudiante).
+- **Modo:** implementación, en `feature/sesion-5-repositorio-mysql`.
+- **Herramientas:** edición de archivos, Docker (bases e imagen), Newman, `curl`, scripts
+  descartables. Sin skills ni subagentes.
+
+**Qué se hizo**
+- [src/datos/activosRepositorio.ts](src/datos/activosRepositorio.ts) reescrito sobre Sequelize: mismas
+  funciones, ahora asíncronas. El filtro `?simbolo=` es un `WHERE`. Todo lo que devuelve está
+  **releído de la base** tras escribir.
+- [src/datos/mapeoActivo.ts](src/datos/mapeoActivo.ts): fila ↔ `Activo` en funciones puras.
+- Servicio y controlador: solo `async`/`await`, más lo que cambia por la base (ver decisiones).
+- [src/servidor.ts](src/servidor.ts): conecta MySQL → migra → conecta Mongo → escucha; si algo falla no
+  levanta. Cierre ordenado con SIGTERM/SIGINT.
+- [src/modelos/limites.ts](src/modelos/limites.ts): rangos que entran en las columnas, aplicados en la
+  validación y en la conversión de moneda.
+- Postman: request `00 - Limpiar el portafolio` (los datos ahora persisten).
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| El símbolo único lo hace cumplir la restricción `UNIQUE`; se quitó la búsqueda previa | Claude | "Buscar y después guardar" no es seguro con una base real: 5 `POST` simultáneos del mismo símbolo → 1 da 201 y 4 dan 409 |
+| El repositorio lanza `SimboloDuplicadoError` (no `ErrorApi`); el servicio lo traduce a 409 | Claude, **cambia el plan** | El repositorio no conoce HTTP; el plan decía que lanzara `ErrorApi` directo |
+| Releer la fila tras escribir | Claude (según el plan) | MySQL redondea los `DECIMAL`: `98.456` se guarda `98.46` y el POST tiene que decir lo mismo que el GET |
+| Rangos numéricos validados (cantidad 1e-8…1e15, precio 0.01…1e15) | Claude | `cantidad: 1e-9` se redondea a 0, viola el `CHECK` y daba 500 |
+| `actualizarActivo` relee el activo tras el pipeline y trata `reemplazar` → `undefined` como 404 | Claude | Sigue cubriendo el borrado concurrente (ahora con base real) |
+| El request de limpieza de Postman se adelantó de la sesión 7 a esta | Claude | Sin él la colección no se puede correr dos veces |
+| Se fijaron `@emnapi/core` y `@emnapi/runtime` como devDependencies | Claude | Ver hallazgo del build de Docker |
+
+**Hallazgo: la imagen de Docker no se podía construir.** `npm ci` fallaba con "Missing:
+@emnapi/core from lock file": Jest arrastra un binario WASM opcional (`unrs-resolver`) que npm en
+Windows no registra en el lock. Es un problema que ya existía desde la sesión 1 (Jest) y no se había
+visto porque nunca se había construido la imagen después. Se arregló fijando esas dos dependencias; `npm
+ci` limpio pasa y `docker build` termina bien.
+
+**Verificación**
+- `npm run check` sin errores; `npm test`: 12 suites, 131 tests en verde (11 nuevos: mapeo y límites).
+- Persistencia: un activo creado sigue ahí tras reiniciar la API; también está en MySQL (`SELECT`).
+- Consistencia: `POST` con `precioCompra: 98.456` y `cantidad: 0.123456789` responde `98.46` y
+  `0.12345679`, igual que el `GET` siguiente y que la fila.
+- Newman **dos corridas seguidas**: 0 fallas, 45 aserciones (la limpieza funciona).
+- Casos solo posibles con base real: carrera de 5 `POST` (1×201, 4×409); límites → 400 y nunca 500; `PUT`
+  con símbolo ajeno → 409, `PUT` conserva `creadoEn`; 0 errores no controlados en el log.
+- Arranque con MongoDB caído → "MongooseServerSelectionError" y exit 1 (tarda ~12 s); con MySQL caído →
+  "SequelizeConnectionRefusedError: ECONNREFUSED" y exit 1.
+- **Imagen de Docker en Linux**: contra las bases del host, conecta, migra, responde y `docker stop`
+  (SIGTERM real) la cierra en 1 s con código 0. Con el `.env` local falla con `ECONNREFUSED`, como se esperaba.
+
+**Pendientes / a tener en cuenta**
+- En Windows `kill -INT` no entrega la señal; el cierre se verificó disparando el evento dentro del proceso
+  y, ya con señal real, en el contenedor.
+- El servicio `api` dentro del compose (con `MYSQL_HOST=mysql`) queda para la sesión 7.
+- Un fallo de Mongo al arrancar corta la API; en la sesión 6 una caída en *ejecución* no debe cortar las
+  operaciones.
+
+---
+
+## Sesión 6 — Auditoría en MongoDB · 2026-10-07
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el confirmado por el estudiante).
+- **Modo:** implementación, en `feature/sesion-6-auditoria-mongo`.
+- **Contexto:** la computadora se apagó entre la sesión 5 y esta; se comprobó que el repo, la rama
+  `develop` publicada y los contenedores estaban intactos antes de seguir.
+- **Herramientas:** edición de archivos, `mongosh` dentro del contenedor, Newman, `curl`,
+  pruebas de mutación a mano. Sin skills ni subagentes.
+
+**Qué se hizo**
+- [src/datos/modelos/registroAuditoriaModelo.ts](src/datos/modelos/registroAuditoriaModelo.ts): schema
+  Mongoose (como el del ejemplo): operación `CREAR | ACTUALIZAR | ELIMINAR`, `antes`/`despues`/`metadatos`
+  como `Mixed`, tres índices para las tres consultas que tiene.
+- [src/datos/auditoriaRepositorio.ts](src/datos/auditoriaRepositorio.ts): `registrar`, `historialDe`, `listar`;
+  solo alta y consulta. [mapeoAuditoria.ts](src/datos/mapeoAuditoria.ts): documento → registro, función pura.
+- [src/servicios/crearServicioAuditoria.ts](src/servicios/crearServicioAuditoria.ts): fábrica con el repositorio,
+  el logger y el tiempo máximo por parámetro; cableada en `auditoriaServicio.ts`.
+- `activosServicio`: crear → `CREAR` (con la conversión de moneda en `metadatos`); actualizar → `ACTUALIZAR`
+  (antes, después y `camposModificados`); eliminar → `ELIMINAR` (se lee el activo antes de borrar).
+- Endpoints `GET /api/activos/:id/historial` y `GET /api/auditoria` (`?operacion=`, `?limite=`).
+- Postman: 4 requests nuevos. README: sección de auditoría, endpoints, estructura y decisiones.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| La auditoría es de **mejor esfuerzo**: si falla, la operación responde bien y el error va al log | Claude, propuesto en el plan | MySQL ya confirmó, no hay transacción entre las dos bases y fallarle al cliente por el historial es peor que perder una línea |
+| Tiempo máximo de **2 s** para registrar | Claude | Con Mongo caído el driver tarda 5 s en rendirse en *cada* escritura |
+| Las consultas con Mongo caído dan **503**, no 500 | Claude | Es un servicio del que depende, no un bug de la API |
+| Historial de un id desconocido → 404; de uno eliminado → 200 | Claude | Es justo lo que el historial tiene que poder responder |
+| Operaciones en español (`CREAR`, `ACTUALIZAR`, `ELIMINAR`) | Claude | Convención del proyecto; el ejemplo las tenía en inglés |
+| Se agregaron `camposModificados` y `metadatos.origen` | Claude | El ejemplo del profesor guardaba `changedFields` y `metadata.source` |
+| Se leen `limite` (1–200, 50 por defecto) y `operacion` | Claude | Evitar devolver una colección que "puede crecer exponencialmente" entera |
+| Tres índices en vez de uno | Claude | Uno por consulta: por activo, general y filtrada por operación |
+
+**Verificación**
+- `npm run check` sin errores; `npm test`: 15 suites, 158 tests en verde (27 nuevos).
+- Mutaciones (3): no loguear el fallo de `registrar`, límite máximo 201 y sacar el tope de tiempo → las 3 detectadas.
+- Ciclo real contra MongoDB: crear en EUR → actualizar → eliminar. El historial trae los 3 registros en
+  orden, con la conversión (tasa 1.125), antes y después, y campos modificados; también están en Mongo
+  (`mongosh`) con sus 4 índices.
+- **MongoDB apagado con la API corriendo:** `POST` → 201 en 2,1 s y el activo queda en MySQL; el error
+  queda en el log; `GET` del historial → 503; `GET /activos` (MySQL) → 200. Al volver Mongo, la API se
+  reconectó sola y el siguiente `POST` se registró.
+- Newman, dos corridas seguidas: 27 requests, 56 aserciones, 0 fallas.
+
+**Pendientes / a tener en cuenta**
+- Mientras Mongo está caído, cada escritura demora hasta 2 s y queda sin registro (decisión asumida).
+- Un id mal escrito en `GET /api/activos/:id/historial` da 404 igual que uno inexistente.
+- El tema de consistencia entre las dos bases va a la respuesta de la Parte 4 (sesión 7).
+
+---
+
+## Sesión 7 — API en Compose y cierre de la Parte 4 · 2026-10-07
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el confirmado por el estudiante).
+- **Modo:** implementación, en `feature/sesion-7-api-en-compose`.
+- **Herramientas:** Docker Compose, Newman, `curl`. Las revisiones (`/code-review`, `/security-review`)
+  se registran en la entrada siguiente.
+
+**Qué se hizo**
+- Servicio `api` en [docker-compose.yml](docker-compose.yml): build del `Dockerfile`, `env_file: .env` y las
+  variables que cambian dentro de la red de Docker (`MYSQL_HOST=mysql`, `MONGO_HOST=mongodb`, puertos
+  internos), `depends_on` con `service_healthy`, healthcheck propio contra `/salud`.
+- `.dockerignore`: se suman `Contextos`, `pruebas` y las configuraciones de desarrollo.
+- README: sección Docker reescrita. `RESPUESTAS-PARTE-4.md`.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| La API también se publica solo en `127.0.0.1` | Claude | Salió en `0.0.0.0` (toda la red) y no tiene autenticación; las bases ya iban a local |
+| El healthcheck de MySQL pasó a `-h 127.0.0.1` | Claude | Ver hallazgo |
+| `NODE_ENV` queda como lo trae el `.env` (development) | Claude | Logs legibles para el curso; en producción real saldría JSON |
+| El mismo `.env` sirve para local y para el compose, que pisa lo que cambia | Claude | Un solo archivo de configuración |
+
+**Hallazgo: arrancar desde cero fallaba la primera vez.** Con un volumen nuevo, MySQL arranca un
+servidor temporal solo por socket y el healthcheck del ejemplo (`mysqladmin ping -h localhost`) le
+contestaba "sano". La API se conectaba antes de tiempo, salía con error, y la política `restart` la
+levantaba de nuevo: terminaba funcionando, pero `--wait` informaba `unhealthy`. Se corrigió probando por
+TCP. El mismo defecto está en el compose del ejemplo del profesor.
+
+**Verificación**
+- Los tres servicios `healthy` con un solo comando (`docker compose up -d --build --wait`).
+- **Newman contra la API dentro del contenedor**, dos corridas seguidas: 29 requests, 56 aserciones, 0 fallas.
+- `docker compose down` (sin `-v`) y volver a levantar: el activo y su historial siguen.
+- `docker compose stop api` (SIGTERM real): cierra en 1 s con código 0.
+- **Desde cero** (`down -v` + un comando), tres veces seguidas: 23–34 s, `healthy`, **0 reinicios** de la
+  API; las migraciones se aplican solas y el `POST` registra su auditoría.
+
+**Pendientes**
+- `/code-review` y `/security-review` de la Parte 4 y, con el OK del estudiante, merge a `main`.
+
+---
+
+## Revisión de código de la Parte 4 · 2026-10-07
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
+- **Skill usada:** `/code-review` en nivel *high* sobre lo que `develop` tenía de más que `main` (sesiones 4 a 7).
+  Devolvió 10 hallazgos; se evaluaron uno por uno, en `fix/revision-parte-4`.
+
+| # | Hallazgo | Decisión |
+|---|---|---|
+| 1 | El healthcheck de Mongo no se autentica: el `mongod` temporal de la inicialización (sin auth) respondería "sano" | **Corregido.** Es el mismo defecto que ya se había arreglado en MySQL. Un cliente anónimo recibe `Unauthorized`, o sea que el ping anónimo no probaba nada |
+| 2 | `PUT` lee-modifica-escribe sin transacción: el `antes` auditado puede no ser lo que se reemplazó | **Corregido:** transacción con `SELECT ... FOR UPDATE`; el repositorio devuelve el `antes` real |
+| 3 | `registrar` espera hasta 2 s a Mongo dentro de la petición | **No se corrige.** Es el compromiso elegido y documentado: esperar da orden y una garantía mayor de registro; fire-and-forget evitaría la demora pero perdería registros sin que nadie lo note |
+| 4 | El historial da 404 o `[]` según lo que haya en cada base | **No se corrige.** Es inherente al mejor esfuerzo: si la auditoría se perdió, el historial de ese activo queda incompleto |
+| 5 | El cierre ordenado no es idempotente | **Corregido** (bandera `cerrando`) |
+| 6 | `buscarPorSimbolo` quedó sin uso | **Corregido** (se borró) |
+| 7 | `MONGO_URI` se arma al importar `env`: `migrar` exigía variables de Mongo | **Corregido:** pasó a una función `mongoUri()` que el servidor llama al arrancar |
+| 8 | El logger de Umzug mapeaba `warn` a `info` y podía imprimir `undefined` | **Corregido** |
+| 9 | Los rangos numéricos están repartidos en migración, `limites.ts` y el filtro; un error de base da 500 | **No se corrige.** Ya validado y documentado; la duplicación es el precio de rechazar con 400 antes de llegar a la base |
+| 10 | `?limite=1&limite=2` se ignoraba en silencio | **Corregido:** da 400 |
+
+**Verificación:** 158 tests y `check` en verde; tres arranques desde cero con el healthcheck de Mongo nuevo
+(0 reinicios de la API); 6 `PUT` simultáneos con una cadena de auditoría consistente; `migrar:estado` sin
+ninguna variable de Mongo; parámetros repetidos → 400; tres señales seguidas → un solo cierre.
+
+---
+
+## Revisión de seguridad de la Parte 4 · 2026-10-07
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
+- **Skill usada:** `/security-review` sobre lo que `develop` tenía de más que `main`. Para que pudiera calcular el
+  diff se apuntó `origin/HEAD` a `main` (es solo una referencia local; no toca el remoto).
+- **Resultado: sin vulnerabilidades de alta confianza.** El informe vino en inglés porque la consigna de la skill lo
+  estaba y pedía devolver solo el informe; el estudiante lo notó y se pasó a español.
+
+**Qué se revisó y por qué no hay problema**
+- **Inyección SQL:** todo pasa por Sequelize, que parametriza; las sentencias `ALTER TABLE` de la migración son constantes.
+- **Inyección NoSQL:** `entidadId` viene de un parámetro de ruta (siempre texto), `operacion` se valida contra una lista
+  cerrada y `limite` contra `^d+$` y un rango. Los parámetros repetidos se rechazan con 400 y no llegan a Mongo como arrays.
+- **Contenido guardado en la auditoría:** solo activos ya validados por Zod y metadatos armados por el servidor.
+- **Exposición de información:** el error no controlado responde un mensaje genérico; el stack va solo al log. No se loguean
+  la URI de Mongo ni las contraseñas.
+- **Red e imagen:** las tres piezas publican solo en `127.0.0.1`; el healthcheck usa `$$VAR` (no deja credenciales literales
+  en `docker inspect`); `.env` queda fuera de la imagen y el contenedor corre sin privilegios.
+
+**Fuera del alcance de esa revisión** (anotado como mejora en `RESPUESTAS-PARTE-4.md`): la API no tiene autenticación (ya
+era así y afecta a todos los endpoints) y la aplicación se conecta a MongoDB con el usuario root.

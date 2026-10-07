@@ -1,7 +1,7 @@
 # API REST — Portafolio de Criptoactivos
 
 API REST para gestionar un portafolio de criptoactivos, con CRUD completo sobre
-almacenamiento en memoria, integración con APIs externas (cotizaciones y tipo de cambio)
+persistencia en MySQL, integración con APIs externas (cotizaciones y tipo de cambio)
 y procesamiento con el patrón **Pipes & Filters**: un pipeline de ingesta para los activos
 nuevos y otro de análisis de riesgo para lotes.
 
@@ -13,7 +13,7 @@ nuevos y otro de análisis de riesgo para lotes.
 
 - Node.js **22 o superior** (probado en v24.11). Se necesita esa versión para el flag
   nativo `--env-file` y para ejecutar archivos `.ts` sin compilar.
-- Docker (opcional, solo para levantar el contenedor).
+- Docker con Compose v2 (`docker compose`), para levantar MySQL y MongoDB.
 
 ---
 
@@ -35,6 +35,10 @@ cp .env.example .env      # en Windows: copy .env.example .env
 | `npm start` | Ejecuta la versión compilada |
 | `npm run check` | Verifica los tipos de `src/` y `pruebas/` sin generar archivos |
 | `npm test` | Corre los tests con Jest |
+| `npm run migrar` | Aplica las migraciones pendientes de MySQL |
+| `npm run migrar:deshacer` | Deshace la última migración aplicada |
+| `npm run migrar:estado` | Lista las migraciones aplicadas y las pendientes |
+| `npm run db:verificar` | Comprueba que MySQL y MongoDB respondan con la configuración del `.env` |
 
 Los comandos son, en realidad:
 
@@ -49,23 +53,142 @@ La API queda disponible en `http://localhost:3000`.
 
 ---
 
-## Docker
+## Bases de datos
+
+El proyecto usa dos motores, cada uno para lo que mejor hace: **MySQL** (vía Sequelize) para
+la entidad `Activo`, que tiene estructura fija y reglas de integridad, y **MongoDB** (vía
+Mongoose) para la auditoría, que crece rápido y no necesita un esquema rígido.
 
 ```bash
-# Construir la imagen
-docker build -t portafolio-cripto .
+docker compose up -d --wait mysql mongodb   # solo las bases: MySQL 8.4 y MongoDB 8.0, esperando a que estén healthy
+npm run dev                                  # la API: conecta, migra y escucha (o npm run migrar a mano)
+npm run db:verificar                         # comprueba que la app llega a las dos bases
 
-# Ejecutar el contenedor
-docker run --rm -p 3000:3000 --env-file .env portafolio-cripto
+# ...o todo, API incluida, dentro de Docker (ver la sección Docker):
+docker compose up -d --build --wait
+```
 
-# Verificar
+| Comando de Docker | Qué hace |
+|---|---|
+| `docker compose ps` | Estado de los contenedores |
+| `docker compose stop` / `start` | Detiene / reanuda, conservando los datos |
+| `docker compose down` | Elimina los contenedores, **conserva** los datos (están en volúmenes) |
+| `docker compose down -v` | Elimina también los volúmenes: **borra todos los datos** |
+
+Las credenciales y los puertos salen del `.env` (ver [`.env.example`](.env.example)), que lee
+tanto Compose como la aplicación. Son credenciales de **desarrollo local**; los puertos se
+publican solo en `127.0.0.1`.
+
+> **Puerto ocupado:** si en tu máquina ya hay un MySQL o un MongoDB local en `3306` o
+> `27017`, cambiá `MYSQL_PORT` o `MONGO_PORT` en el `.env` (por ejemplo `27018`) y volvé a
+> levantar. Solo cambia el puerto del host; el del contenedor sigue siendo el mismo.
+
+### Migraciones
+
+El esquema de MySQL **solo cambia por migraciones** versionadas (con [Umzug](https://github.com/sequelize/umzug)),
+nunca con `sync()`. Cada una tiene `up` (aplica) y `down` (deshace), y la lista vive en
+[`src/datos/migraciones/index.ts`](src/datos/migraciones/index.ts). Umzug anota las ya
+aplicadas en la tabla `migraciones`, así `npm run migrar` solo corre las que faltan y se
+puede ejecutar las veces que haga falta.
+
+### Tabla `activos`
+
+| Columna | Tipo | Regla |
+|---|---|---|
+| `id` | `CHAR(36)` | Clave primaria (el UUID que genera el servidor) |
+| `simbolo` | `VARCHAR(10)` | No nulo, **único** |
+| `nombre` | `VARCHAR(50)` | No nulo |
+| `cantidad` | `DECIMAL(24,8)` | No nulo, **mayor a 0** (`CHECK`) |
+| `precio_compra` | `DECIMAL(20,2)` | No nulo, **mayor a 0** (`CHECK`) |
+| `creado_en`, `actualizado_en` | `DATETIME(3)` | No nulos |
+
+Las reglas están también en la base y no solo en el código: aunque otra aplicación escriba
+directo en la tabla, MySQL rechaza un símbolo repetido o una cantidad que no sea positiva.
+Se usa `DECIMAL` y no `FLOAT` para no arrastrar errores de redondeo con dinero.
+
+### Auditoría en MongoDB
+
+Cada vez que el servicio **crea, actualiza o elimina** un activo en MySQL, guarda un registro en
+la colección `auditoria_activos` de MongoDB. Los registros no tienen forma fija, y por eso viven
+en MongoDB y no en una tabla:
+
+| Operación | `antes` | `despues` | Otros campos |
+|---|---|---|---|
+| `CREAR` | — | el activo creado | `metadatos.conversionMoneda` si se convirtió de moneda |
+| `ACTUALIZAR` | el activo anterior | el activo guardado | `camposModificados` |
+| `ELIMINAR` | el activo tal como era | — | — |
+
+```json
+GET /api/activos/5406e802-8334-4742-9529-38db013da828/historial
+
+[
+  { "operacion": "ELIMINAR", "entidadId": "5406e802-...", "antes": { "simbolo": "BTC", "cantidad": 1.25, "precioCompra": 42000 },
+    "metadatos": { "origen": "API" }, "ocurridoEn": "2026-10-07T20:55:10.113Z" },
+  { "operacion": "ACTUALIZAR", "antes": { "cantidad": 0.5 }, "despues": { "cantidad": 1.25 },
+    "camposModificados": ["cantidad", "precioCompra"], "ocurridoEn": "2026-10-07T20:55:10.060Z" },
+  { "operacion": "CREAR", "despues": { "simbolo": "BTC", "cantidad": 0.5, "precioCompra": 112.52 },
+    "metadatos": { "origen": "API", "conversionMoneda": { "monedaOriginal": "EUR", "precioOriginal": 100, "tasa": 1.12519 } },
+    "ocurridoEn": "2026-10-07T20:55:09.870Z" }
+]
+```
+
+Va del evento más reciente al más viejo y sigue disponible aunque el activo ya no exista (es
+justamente lo que queda). `GET /api/auditoria` lista el historial general; `?operacion=ELIMINAR`
+filtra y `?limite=` acota (de 1 a 200, 50 por defecto). Un id que nunca existió da 404.
+
+> **Si MongoDB falla, la operación no se pierde.** MySQL y MongoDB son dos escrituras
+> independientes y no hay una transacción que abarque las dos. Como MySQL ya confirmó lo que
+> importa, la auditoría es de **mejor esfuerzo**: si no se puede registrar (o MongoDB no responde
+> en 2 segundos), la API responde igual con éxito y deja el error en el log. El costo es que
+> puede haber operaciones sin registro. Las consultas del historial, en cambio, responden 503 si
+> MongoDB no está. La solución completa sería un *Transactional Outbox* (ver mejoras).
+
+---
+
+## Docker
+
+### Todo el proyecto con un solo comando
+
+```bash
+cp .env.example .env
+docker compose up -d --build --wait     # la API, MySQL y MongoDB
 curl http://localhost:3000/salud
 ```
 
+`docker-compose.yml` levanta tres servicios y espera a que estén sanos:
+
+| Servicio | Imagen | Notas |
+|---|---|---|
+| `api` | La del [`Dockerfile`](Dockerfile) (Node 24, multi-stage, usuario sin privilegios) | Arranca recién cuando MySQL y MongoDB están `healthy`; aplica las migraciones al iniciar |
+| `mysql` | `mysql:8.4` | Datos en el volumen `mysql_data` |
+| `mongodb` | `mongo:8.0` | Datos en el volumen `mongodb_data` |
+
+Los tres puertos se publican solo en `127.0.0.1`. La API recibe el mismo `.env` que usás en
+local, pero el compose **pisa** las variables que cambian dentro de la red de Docker: allí las
+bases no están en `localhost` sino bajo el nombre de su servicio (`MYSQL_HOST=mysql`,
+`MONGO_HOST=mongodb`) y se llega por el puerto interno (`3306`, `27017`), no por el que se
+publica al host.
+
+| Comando | Qué hace |
+|---|---|
+| `docker compose logs -f api` | Sigue los logs de la API |
+| `docker compose up -d --build --wait mysql mongodb` | Solo las bases (y la API con `npm run dev`) |
+| `docker compose down` | Baja todo y **conserva** los datos |
+| `docker compose down -v` | Baja todo y **borra** los datos: el próximo arranque parte de cero |
+
+### La imagen sola
+
+```bash
+docker build -t portafolio-cripto .
+docker run --rm -p 3000:3000 --env-file .env   -e MYSQL_HOST=host.docker.internal -e MONGO_HOST=host.docker.internal portafolio-cripto
+```
+
+Con el `.env` tal cual la API falla con `ECONNREFUSED`: dentro de un contenedor `localhost` es el
+propio contenedor. Ese ejemplo apunta la imagen a las bases publicadas en el host.
+
 > **Nota:** dentro del contenedor **no** se usa `--env-file` de Node. El archivo `.env`
 > queda excluido de la imagen (ver `.dockerignore`) y las variables se inyectan al
-> ejecutar, con `docker run --env-file .env`. Así la imagen no lleva configuración
-> adentro y sirve para cualquier entorno.
+> ejecutar. Así la imagen no lleva configuración adentro y sirve para cualquier entorno.
 
 ---
 
@@ -81,6 +204,12 @@ Se cargan con el flag **nativo** de Node `--env-file`, sin usar la librería `do
 | `API_TASAS_URL` | `https://open.er-api.com/v6/latest` | Endpoint de tipo de cambio (se consulta como `<URL>/<MONEDA>`) |
 | `MONEDA` | `usd` | Moneda de las cotizaciones |
 | `TIMEOUT_MS` | `5000` | Timeout de las llamadas externas |
+| `MYSQL_HOST`, `MYSQL_PORT` | `localhost`, `3306` | Dónde está MySQL |
+| `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` | `crypto_db`, `crypto_user`, … | Base y credenciales de la aplicación |
+| `MYSQL_ROOT_PASSWORD` | — | Solo la usa Docker Compose al crear el contenedor |
+| `MONGO_HOST`, `MONGO_PORT` | `localhost`, `27017` | Dónde está MongoDB |
+| `MONGO_DATABASE` | `crypto_db` | Base donde se guarda la auditoría |
+| `MONGO_INITDB_ROOT_USERNAME`, `MONGO_INITDB_ROOT_PASSWORD` | `mongo_root`, … | Usuario con el que se conecta la aplicación |
 | `UMBRAL_MONTO_USD` | `100000` | Monto (en USD) que, superado, dispara la *Whale Alert*. Admite 0 |
 | `UMBRAL_VOLATILIDAD` | `80` | Volatilidad (en %) que, superada, marca un activo como `high_risk` |
 
@@ -100,6 +229,8 @@ Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 | PUT | `/api/activos/:id` | Reemplaza un activo | 200 | 400, 404, 409, 502 |
 | DELETE | `/api/activos/:id` | Elimina un activo | 204 | 404 |
 | POST | `/api/activos/analizar` | Analiza un lote de activos (no guarda nada) | 200 | 400 |
+| GET | `/api/activos/:id/historial` | Historial de un activo, también si ya fue eliminado | 200 | 404, 503 |
+| GET | `/api/auditoria` | Historial general (`?operacion=`, `?limite=`) | 200 | 400, 503 |
 | GET | `/api/activos/:id/precio` | Activo + cotización + rendimiento | 200 | 404, 502 |
 | GET | `/api/precios/:simbolo` | Cotización de un símbolo suelto | 200 | 400, 404, 502 |
 
@@ -113,7 +244,8 @@ Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 | 400 | Datos inválidos, JSON malformado, símbolo con formato inválido |
 | 404 | Id inexistente, ruta inexistente, o símbolo sin cotización disponible |
 | 409 | Ya existe un activo con ese símbolo |
-| 502 | La API externa de precios falló (timeout, red, respuesta inesperada) |
+| 502 | La API externa de precios o de tipo de cambio falló (timeout, red, respuesta inesperada) |
+| 503 | MongoDB no responde y se pidió el historial de auditoría |
 | 500 | Error no controlado |
 
 ### Formato de error
@@ -154,14 +286,20 @@ en el cuerpo, se ignora.
 |---|---|
 | `simbolo` | 1–10 caracteres alfanuméricos; se normaliza a mayúsculas (`btc` → `BTC`) |
 | `nombre` | Texto no vacío, máximo 50 caracteres |
-| `cantidad` | Número mayor a 0 |
-| `precioCompra` | Número mayor a 0 |
+| `cantidad` | Número entre `0.00000001` y `1000000000000000` (8 decimales) |
+| `precioCompra` | Número entre `0.01` y `1000000000000000` (2 decimales) |
 | `moneda` | Opcional. Código de 3 letras (`EUR`, `uyu`...); si falta se asume `USD` |
 
 Si `moneda` no es USD, el servidor consulta el tipo de cambio y **guarda `precioCompra`
 convertido a USD** con dos decimales: `{"precioCompra": 2000, "moneda": "EUR"}` se guarda
 como `2241.88`. El activo guardado no lleva el campo `moneda`. Una moneda inexistente da
 400; si la API de tipo de cambio no responde, 502.
+
+Los rangos de `cantidad` y `precioCompra` son los que entran en las columnas `DECIMAL` de la
+tabla: un valor positivo pero más chico (como `cantidad: 0.000000001`) MySQL lo redondearía a
+cero y violaría el `CHECK`, así que se rechaza con 400 en lugar de fallar con un 500. Con más
+decimales de los que admite la columna, el valor se redondea y la respuesta devuelve **lo que
+quedó guardado** (`precioCompra: 98.456` responde `98.46`).
 
 Se devuelven **todos** los errores de validación juntos, no solo el primero.
 Además, el **símbolo es único** dentro del portafolio: hay una sola posición por activo.
@@ -318,7 +456,15 @@ src/
 │   ├── env.ts                     # único archivo que lee process.env
 │   └── logger.ts                  # logger Winston
 ├── modelos/activo.ts              # tipos del dominio
-├── datos/activosRepositorio.ts    # el array en memoria (único estado)
+├── datos/
+│   ├── activosRepositorio.ts      # acceso a la tabla activos (Sequelize); lanza SimboloDuplicadoError
+│   ├── mapeoActivo.ts             # fila de MySQL <-> Activo del dominio (funciones puras)
+│   ├── auditoriaRepositorio.ts    # historial de auditoría sobre MongoDB (Mongoose)
+│   ├── mapeoAuditoria.ts          # documento de MongoDB -> RegistroAuditoria (función pura)
+│   ├── conexiones.ts              # conexión a MySQL (Sequelize) y MongoDB (Mongoose)
+│   ├── modelos/activoModelo.ts    # modelo Sequelize de la tabla activos
+│   ├── migraciones/               # cambios de esquema versionados (up / down)
+│   └── migrar.ts, migrarCli.ts    # ejecutor de migraciones (Umzug) y su comando
 ├── pipeline/
 │   ├── pipeline.ts                # runner genérico: Filtro y Pipeline
 │   ├── ingesta/                   # validación → normalización → conversión de moneda
@@ -327,12 +473,14 @@ src/
 ├── servicios/
 │   ├── activosServicio.ts         # reglas de negocio del CRUD (usa el pipeline de ingesta)
 │   ├── analisisServicio.ts        # usa el pipeline de análisis
+│   ├── crearServicioAuditoria.ts  # registrar (mejor esfuerzo) y consultar el historial
+│   ├── auditoriaServicio.ts       # esa fábrica ya conectada a MongoDB y al logger
 │   ├── preciosServicio.ts         # llamada a CoinGecko
 │   └── tasasServicio.ts           # llamada a la API de tipo de cambio
-├── controladores/activosControlador.ts
+├── controladores/                 # activosControlador.ts y auditoriaControlador.ts
 ├── rutas/activosRutas.ts
 ├── errores/ErrorApi.ts
-├── utilidades/redondear.ts
+├── utilidades/                    # redondear.ts, camposModificados.ts
 └── middlewares/manejadorErrores.ts
 
 pruebas/                           # tests de Jest (un archivo por filtro y por pipeline)
@@ -345,18 +493,20 @@ el repositorio no sabe de negocio.**
 Flujo de una petición:
 
 ```
-Cliente → rutas → controlador → servicio → pipeline de ingesta → repositorio (array en memoria)
+Cliente → rutas → controlador → servicio → pipeline de ingesta → repositorio → MySQL
                                     │            └──→ tasasServicio → API de tipo de cambio
+                                    │            └──→ auditoría → MongoDB (mejor esfuerzo)
                                     ├────→ pipeline de análisis (lote → reporte)
                                     └────→ preciosServicio → CoinGecko
 
 Cualquier throw de ErrorApi → manejadorErrores → { "error": { ... } }
 ```
 
-> **Almacenamiento temporal:** los datos viven en un array en memoria y **se pierden al
-> reiniciar el proceso**. Es lo que pide la consigna. Al estar aislados en
-> `activosRepositorio.ts`, migrar a una base de datos implicaría reescribir solo ese
-> archivo.
+> **Persistencia:** los activos viven en MySQL y **sobreviven a un reinicio** de la API. Al
+> arrancar, `servidor.ts` conecta MySQL, aplica las migraciones pendientes, conecta MongoDB
+> y recién entonces escucha; si algo falla, la API no levanta y lo dice con un mensaje
+> claro. Pasar de la memoria a la base reescribió solo `activosRepositorio.ts`: los
+> servicios y controladores solo sumaron `async`/`await`.
 
 ---
 
@@ -365,15 +515,15 @@ Cualquier throw de ErrorApi → manejadorErrores → { "error": { ... } }
 1. Levantar la API (`npm run dev`).
 2. En Postman: **Import** → seleccionar
    [`postman/portafolio-cripto.postman_collection.json`](postman/portafolio-cripto.postman_collection.json).
-3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 22 de
+3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 27 de
    una sola vez.
 
 La colección trae dos variables: `baseUrl` (`http://localhost:3000`) e `idActivo`, que se
 completa sola — el request *03 - Crear activo BTC* guarda el id devuelto y los siguientes
 lo reutilizan, así no hace falta copiar y pegar UUIDs a mano.
 
-> Si se corre la colección dos veces seguidas, reiniciar la API antes: los activos de la
-> corrida anterior siguen en memoria y el paso 03 devolvería 409.
+> La colección se puede correr las veces que haga falta: el request *00 - Limpiar el
+> portafolio* borra los activos de corridas anteriores (los datos ahora persisten en MySQL).
 
 ### Equivalente en `curl`
 
@@ -436,7 +586,20 @@ curl http://localhost:3000/api/ruta-inexistente                           # 404
 | Precio guardado siempre en USD | La conversión ocurre al ingresar; el resto de la app (rendimiento contra CoinGecko) no necesita saber en qué moneda se compró. |
 | Sin `uuid` | `crypto.randomUUID()` viene en el core. |
 | `crypto.randomUUID()` en vez de un contador | Con `splice` los índices se reordenan; un contador obligaría a mantener el estado de la secuencia. |
-| Repositorio separado del servicio | Aísla el array: cambiar a base de datos toca un solo archivo. |
+| Repositorio separado del servicio | Aísla el acceso a los datos. Se comprobó en la práctica: pasar de un array a MySQL reescribió solo ese archivo. |
+| El símbolo único lo hace cumplir la restricción `UNIQUE`, no una búsqueda previa | "Buscar y después guardar" no es seguro: dos pedidos simultáneos pasan la búsqueda a la vez. Con 5 `POST` simultáneos del mismo símbolo, 1 da 201 y 4 dan 409. |
+| El repositorio relee la fila después de escribir | MySQL redondea los `DECIMAL` en silencio; así el `POST` y el `GET` siguiente dicen lo mismo. |
+| Mapeo fila ↔ `Activo` en funciones puras | Concentra las dos diferencias de representación (DECIMAL como texto, fechas como `Date`) y se prueba sin base de datos. |
+| Rangos numéricos validados de antemano | Lo que la tabla no puede representar daría un 500; así da un 400 con un mensaje. |
+| `PUT` lee y escribe en una transacción con la fila bloqueada (`SELECT ... FOR UPDATE`) | Si dos `PUT` llegan a la vez, el segundo espera al primero: el `antes` de la auditoría es lo que de verdad se pisó. Con 6 `PUT` simultáneos, cada `antes` es el `despues` del anterior. |
+| El healthcheck de Mongo se autentica | El `mongod` temporal de la inicialización no tiene autenticación y respondería "sano" a un ping anónimo antes de que exista el usuario. |
+| El healthcheck de MySQL prueba por TCP (`127.0.0.1`) | Con un volumen nuevo, la imagen arranca un servidor temporal que solo atiende por socket y que con `localhost` se veía "sano": la API intentaba conectarse antes de tiempo, fallaba y dependía de que `restart` la levantara de nuevo. |
+| La API del compose espera a que las bases estén `healthy` | `depends_on` con `condition: service_healthy`: no arranca contra una base que todavía no atiende. |
+| La auditoría es de mejor esfuerzo | No hay transacción entre MySQL y MongoDB: si el historial falla, la operación ya confirmada no se deshace ni se le falla al cliente. Se paga con posibles operaciones sin registro. |
+| Tiempo máximo de 2 s para registrar | Con MongoDB caído, el driver tardaría 5 s en rendirse en cada escritura; así la demora es acotada. |
+| El historial se lee antes de borrar y sin tocar MySQL | El `ELIMINAR` guarda cómo era el activo; la consulta funciona aunque ya no exista. |
+| Consultas de historial con MongoDB caído → 503 | No es un bug de la API (500) sino un servicio del que depende que no está disponible. |
+| Migraciones al arrancar la API | Cómodo con una sola instancia. Con varias arrancando a la vez convendría un paso de migración aparte. |
 | 409 por símbolo duplicado | El portafolio tiene una única posición por activo. |
 | 404 vs 502 en precios | 404 si el símbolo no está soportado (no se llega a llamar a CoinGecko); 502 solo si CoinGecko falla de verdad, porque el error es de un servicio upstream y no nuestro. |
 | Sin try/catch en los controladores | Express 5 deriva automáticamente al manejador de errores las excepciones y las promesas rechazadas. |
@@ -461,7 +624,8 @@ sin compilar en desarrollo y compilado en producción:
   gratuito de CoinGecko.
 - Resolver los símbolos vía `/coins/list` en vez del mapa fijo (se evitó porque descarga
   unas 15.000 monedas solo para traducir un identificador).
-- Persistencia real (siguiente etapa del ejercicio).
+- *Transactional Outbox* para la auditoría: guardar el evento en MySQL dentro de la misma
+  transacción que el cambio y copiarlo a MongoDB después, para no perder registros si Mongo cae.
 - Caché de tasas de cambio: hoy cada alta en otra moneda consulta la API, y esa consulta
   ocurre antes de comprobar si el símbolo ya existe (409).
 - Loguear los fallos del cliente (4xx) con un nivel menor que los del servidor: hoy un body

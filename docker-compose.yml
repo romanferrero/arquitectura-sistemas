@@ -1,0 +1,89 @@
+# El proyecto completo: la API (Node.js), MySQL (activos) y MongoDB (auditoria).
+#
+# Todo junto:        docker compose up -d --build --wait
+# Solo las bases:    docker compose up -d --wait mysql mongodb   (y la API con npm run dev)
+# Estado:            docker compose ps
+# Logs de la API:    docker compose logs -f api
+# Bajar:             docker compose down       (conserva los datos)
+# Desde cero:        docker compose down -v    (BORRA los datos de ambas bases)
+#
+# Toma las credenciales y los puertos del .env (ver .env.example). Los puertos de
+# las bases se publican solo en 127.0.0.1: no quedan expuestos al resto de la red.
+name: portafolio-cripto
+
+services:
+  api:
+    build: .
+    # Carga el .env completo y despues pisa lo que cambia DENTRO de la red de Docker:
+    # alli las bases no estan en localhost sino bajo el nombre de su servicio, y se
+    # llega por el puerto interno del contenedor (no por el que se publica al host).
+    env_file: .env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MONGO_HOST: mongodb
+      MONGO_PORT: "27017"
+    ports:
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:' + process.env.PORT + '/salud').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    # Se prueba por TCP (127.0.0.1) y NO por socket (localhost): al crear un volumen nuevo,
+    # la imagen arranca primero un servidor temporal que solo atiende por socket. Con
+    # "localhost" ese servidor temporal respondia "sano" y la API intentaba conectarse
+    # antes de que MySQL estuviera de verdad disponible en la red.
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  mongodb:
+    image: mongo:8.0
+    ports:
+      - "127.0.0.1:${MONGO_PORT:-27017}:27017"
+    environment:
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+    volumes:
+      - mongodb_data:/data/db
+    # Se autentica con el usuario root: al crear un volumen nuevo la imagen arranca primero
+    # un mongod temporal SIN autenticacion, que responderia "sano" a un ping anonimo antes de
+    # que exista el usuario. Con credenciales, solo el servidor definitivo pasa la prueba.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongosh --quiet -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --eval "quit(db.runCommand({ ping: 1 }).ok ? 0 : 2)"'
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  mongodb_data:

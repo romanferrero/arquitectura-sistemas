@@ -9,6 +9,10 @@
     "build": "tsc",
     "start": "node --env-file=.env dist/servidor.js",
     "check": "tsc --noEmit -p tsconfig.check.json",
+    "migrar": "node --env-file=.env src/datos/migrarCli.ts subir",
+    "migrar:deshacer": "node --env-file=.env src/datos/migrarCli.ts bajar",
+    "migrar:estado": "node --env-file=.env src/datos/migrarCli.ts estado",
+    "db:verificar": "node --env-file=.env src/datos/verificarConexiones.ts",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
   },
   "keywords": [
@@ -22,10 +26,16 @@
   "license": "ISC",
   "dependencies": {
     "express": "^5.2.1",
+    "mongoose": "^9.10.3",
+    "mysql2": "^3.24.5",
+    "sequelize": "^6.37.8",
+    "umzug": "^3.8.3",
     "winston": "^3.19.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@emnapi/core": "^1.11.3",
+    "@emnapi/runtime": "^1.11.3",
     "@jest/globals": "^30.5.2",
     "@types/express": "^5.0.6",
     "@types/node": "^26.4.0",
