@@ -27,6 +27,19 @@ describe("describirError", () => {
     );
   });
 
+  test("un error agrupado (AggregateError) muestra el código del primero", () => {
+    // Asi llega el error de Redis cuando no hay nadie escuchando en el puerto.
+    const error = new AggregateError([Object.assign(new Error(""), { code: "ECONNREFUSED" })], "");
+
+    expect(describirError(error)).toBe("AggregateError: ECONNREFUSED");
+  });
+
+  test("un error con código propio lo muestra", () => {
+    expect(describirError(Object.assign(new Error("se cortó"), { code: "ECONNRESET" }))).toBe(
+      "Error: se cortó: ECONNRESET",
+    );
+  });
+
   test("un valor que no es un Error se convierte a texto", () => {
     expect(describirError("falló")).toBe("falló");
     expect(describirError(42)).toBe("42");

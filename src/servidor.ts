@@ -3,6 +3,7 @@ import { env, mongoUri } from "./config/env.ts";
 import { logger } from "./config/logger.ts";
 import { cerrarConexiones, conectarMongo, conectarMysql } from "./datos/conexiones.ts";
 import { describirError } from "./datos/describirError.ts";
+import { cerrarRedis, conectarRedis } from "./datos/redis.ts";
 import { migrar } from "./datos/migrar.ts";
 
 /**
@@ -10,7 +11,8 @@ import { migrar } from "./datos/migrar.ts";
  *   1. conecta MySQL,
  *   2. aplica las migraciones pendientes (asi la tabla siempre existe),
  *   3. conecta MongoDB,
- *   4. recien entonces pone la app a escuchar.
+ *   4. conecta Redis,
+ *   5. recien entonces pone la app a escuchar.
  *
  * Si algo de lo anterior falla, la API NO arranca: es mejor cortar con un mensaje
  * claro que levantar y responder 500 a cada pedido.
@@ -33,6 +35,9 @@ async function arrancar(): Promise<void> {
   await conectarMongo();
   logger.info("MongoDB conectado");
 
+  await conectarRedis();
+  logger.info("Redis conectado");
+
   const servidor = app.listen(env.PORT, () => {
     logger.info(`API de portafolio escuchando en http://localhost:${env.PORT}`);
     logger.info(`Entorno: ${env.NODE_ENV} | Moneda: ${env.MONEDA.toUpperCase()}`);
@@ -47,7 +52,7 @@ async function arrancar(): Promise<void> {
     logger.info(`${senal} recibida: cerrando la API`);
     setTimeout(() => process.exit(1), 10_000).unref(); // si algo se cuelga, no esperar para siempre
     servidor.close(() => {
-      void cerrarConexiones().then(() => process.exit(0));
+      void cerrarTodo().then(() => process.exit(0));
     });
     servidor.closeIdleConnections();
   };
@@ -55,8 +60,13 @@ async function arrancar(): Promise<void> {
   process.on("SIGINT", () => cerrar("SIGINT"));
 }
 
+/** Cierra las tres conexiones, aunque alguna falle al cerrarse. */
+async function cerrarTodo(): Promise<void> {
+  await Promise.allSettled([cerrarConexiones(), cerrarRedis()]);
+}
+
 arrancar().catch(async (error: unknown) => {
   logger.error(`No se pudo iniciar la API: ${describirError(error)}`);
-  await cerrarConexiones();
+  await cerrarTodo();
   process.exit(1);
 });
