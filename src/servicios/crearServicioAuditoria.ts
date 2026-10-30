@@ -8,6 +8,7 @@ import type {
   RegistroAuditoria,
 } from "../modelos/auditoria.ts";
 import type { Registrador } from "../pipeline/pipeline.ts";
+import { conTiempoMaximo } from "../utilidades/conTiempoMaximo.ts";
 
 export const LIMITE_POR_DEFECTO = 50;
 export const LIMITE_MAXIMO = 200;
@@ -46,26 +47,16 @@ export function crearServicioAuditoria(dependencias: {
   const { repositorio, registrador, tiempoMaximoMs } = dependencias;
 
   async function registrar(registro: NuevoRegistroAuditoria): Promise<void> {
-    let temporizador: NodeJS.Timeout | undefined;
     try {
-      // Dentro de una funcion async para que tambien un error sincronico sea un rechazo.
-      const guardado = (async () => await repositorio.registrar(registro))();
-      // Si pierde la carrera contra el tiempo, evita un rechazo sin manejar mas tarde.
-      guardado.catch(() => undefined);
-
-      const vencido = new Promise<never>((_resolver, rechazar) => {
-        temporizador = setTimeout(
-          () => rechazar(new Error(`MongoDB no respondió en ${tiempoMaximoMs} ms`)),
-          tiempoMaximoMs,
-        );
-      });
-      await Promise.race([guardado, vencido]);
+      await conTiempoMaximo(
+        () => repositorio.registrar(registro),
+        tiempoMaximoMs,
+        `MongoDB no respondió en ${tiempoMaximoMs} ms`,
+      );
     } catch (error) {
       registrador.error(
         `No se pudo registrar la auditoría (${registro.operacion} ${registro.entidadId}): ${describirError(error)}`,
       );
-    } finally {
-      clearTimeout(temporizador);
     }
   }
 

@@ -62,6 +62,23 @@ describe("crearServicioEstadisticas", () => {
     expect((await servicio.obtener()).masConsultados).toEqual([{ id: "id-borrado", consultas: 1 }]);
   });
 
+  test("si MySQL falla al buscar un símbolo, igual se devuelve el dato de Redis (sin el símbolo) y no un 500", async () => {
+    const falso = crearRedisFalso();
+    const registro = crearRegistroEnMemoria();
+    const servicio = crearServicioEstadisticas({
+      redis: falso.redis,
+      buscarActivo: async () => {
+        throw new Error("MySQL caído");
+      },
+      registrador: registro.registradorDe("Estadisticas"),
+      cantidadMasConsultados: 3,
+    });
+    await falso.redis.zIncrBy(CLAVE_RANKING, 4, "id-btc");
+
+    expect((await servicio.obtener()).masConsultados).toEqual([{ id: "id-btc", consultas: 4 }]);
+    expect(registro.lineas[0]).toContain("[ERROR] Estadisticas: No se pudo buscar el símbolo de id-btc");
+  });
+
   test("con Redis caído da 503 y lo deja en el log", async () => {
     const { servicio, estado, lineas } = armar();
     estado.caido = true;

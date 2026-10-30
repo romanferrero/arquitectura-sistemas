@@ -3,6 +3,7 @@ import { ErrorApi } from "../errores/ErrorApi.ts";
 import type { DatosReporte, EstadoReporte, ReporteValoracion, SeguimientoReporte } from "../modelos/reporte.ts";
 import type { Registrador } from "../pipeline/pipeline.ts";
 import { esIdDeReporte } from "../reportes/estadoReporte.ts";
+import { conTiempoMaximo } from "../utilidades/conTiempoMaximo.ts";
 
 /** Un trabajo de la cola, ya traducido a lo que el servicio necesita saber. */
 export type TrabajoReporte = {
@@ -29,6 +30,10 @@ export type ColaDeReportes = {
  *
  * Si Redis no responde, ambas operaciones dan 503: sin la cola no hay donde dejar el pedido
  * ni donde mirar su estado, y devolver un 202 que no se va a cumplir seria mentirle al cliente.
+ *
+ * Limite conocido: si Redis responde LENTO (mas de `tiempoMaximoMs`), se da 503 pero el pedido
+ * puede terminar encolandose igual, y el cliente que reintente generaria dos reportes. Con
+ * Redis caido no pasa: la cola falla en el acto.
  */
 export function crearServicioReportes(dependencias: {
   cola: ColaDeReportes;
@@ -40,19 +45,11 @@ export function crearServicioReportes(dependencias: {
   const { cola, registrador, tiempoMaximoMs, generarId, ahora } = dependencias;
 
   async function conCola<T>(operacion: () => Promise<T>): Promise<T> {
-    let temporizador: NodeJS.Timeout | undefined;
     try {
-      const pendiente = operacion();
-      pendiente.catch(() => undefined); // si pierde contra el tiempo, evita un rechazo sin manejar
-      const vencido = new Promise<never>((_resolver, rechazar) => {
-        temporizador = setTimeout(() => rechazar(new Error(`Redis no respondió en ${tiempoMaximoMs} ms`)), tiempoMaximoMs);
-      });
-      return await Promise.race([pendiente, vencido]);
+      return await conTiempoMaximo(operacion, tiempoMaximoMs, `Redis no respondió en ${tiempoMaximoMs} ms`);
     } catch (error) {
       registrador.error(`No se pudo usar la cola de reportes: ${describirError(error)}`);
       throw new ErrorApi(503, "La cola de reportes no está disponible en este momento");
-    } finally {
-      clearTimeout(temporizador);
     }
   }
 

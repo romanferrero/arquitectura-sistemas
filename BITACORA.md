@@ -7,7 +7,7 @@ El plan vigente (Partes 5 a 8) está en [PLAN.md](PLAN.md); el de las Partes 3 y
 
 ## Resumen: skills y herramientas usadas
 
-Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron tres veces,
+Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron cuatro veces,
 siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUDE.md`).
 
 | Skill | Cuándo | Para qué | Resultado |
@@ -15,8 +15,9 @@ siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUD
 | `/code-review` (nivel *high*) | Cierre de la Parte 3 | Revisar lo que `develop` tenía de más que `main` | 9 hallazgos: 7 corregidos y 2 documentados |
 | `/code-review` (nivel *high*) | Cierre de la Parte 4 | Ídem, sobre las sesiones 4 a 7 | 10 hallazgos: 7 corregidos y 3 documentados |
 | `/security-review` | Cierre de la Parte 4 | Buscar vulnerabilidades en los cambios | Sin vulnerabilidades de alta confianza |
+| `/code-review` (nivel *high*) | Cierre de la Parte 5 | Ídem, sobre las sesiones 9 y 10 (Redis, BullMQ y el worker) | 9 hallazgos: 6 corregidos y 3 documentados |
 
-Las tres corren en un subproceso aparte (no comparten el contexto de la sesión). En el resto de las sesiones no se
+Las cuatro corren en un subproceso aparte (no comparten el contexto de la sesión). En el resto de las sesiones no se
 usó ninguna skill.
 
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
@@ -748,3 +749,29 @@ Pub/Sub) vuelve sobre cómo sincronizar la caché.
 - `POST /api/activos/reporte` es la operación más cara de la API y hoy no tiene autenticación: la Parte 6 la deja solo para el ADMIN.
 - Siguiente: cierre de la Parte 5 (`/code-review`, correcciones, OK del estudiante, merge a `main` y mensaje al profesor).
 
+---
+
+## Revisión de código de la Parte 5 · 2026-10-30
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
+- **Skill usada:** `/code-review` en nivel *high* sobre lo que `develop` tenía de más que `main` (sesiones 8 a 10). Devolvió **9
+  hallazgos**, que se evaluaron uno por uno en `fix/revision-parte-5`.
+
+| # | Hallazgo | Decisión |
+|---|---|---|
+| 1 | MySQL no distingue mayúsculas en los ids pero las claves de Redis sí: un mismo activo tenía varias claves, y un `PUT` o `DELETE` con otras mayúsculas dejaba la entrada vieja | **Corregido:** todo lo que toca Redis usa el id en minúsculas (4 tests nuevos; verificado con la API real) |
+| 2 | Si falla la invalidación (Redis con un corte breve), la caché sirve el dato viejo hasta el TTL | **No se corrige.** Es el límite ya documentado de una caché de mejor esfuerzo (se vio en la sesión 9); la Parte 7 vuelve sobre esto |
+| 3 | Si Redis responde lento (más de 2 s) el `add` puede encolar después de dar 503, y un reintento genera dos reportes | **Documentado** en el código, el README y `RESPUESTAS-PARTE-5.md`; con Redis caído no pasa. Se resolvería con una clave de idempotencia |
+| 4 | La carrera contra un tiempo máximo estaba copiada en la auditoría y en los reportes | **Corregido:** helper `conTiempoMaximo` compartido, con 5 tests |
+| 5 | El `ZINCRBY` del ranking se esperaba en la ruta caliente de la lectura | **Corregido:** ya no se espera (nunca rechaza), con lo que el `GET` hace un solo viaje a Redis en un HIT |
+| 6 | El cierre del worker no tenía `.catch`: con Redis caído al apagar moría sin cerrar las conexiones ni loguear | **Corregido:** se loguea, se cierra el resto y sale con código 1 |
+| 7 | El contador de reportes puede perder un conteo (si el worker cae justo después de completar) o duplicarlo (si se reprocesa) | **Documentado** como mejora (`SADD` por id de reporte); ya era de mejor esfuerzo |
+| 8 | Un fallo de MySQL al buscar un símbolo hacía fallar con 500 todas las estadísticas | **Corregido:** se devuelve el dato de Redis sin el símbolo y se loguea |
+| 9 | `CLAUDE.md` decía que `REDIS_*` se lee con `redisUrl()`, pero se sumó `redisConfig()` para BullMQ | **Corregido:** la documentación nombra las dos |
+
+**Verificación:** `check` y 252 tests en verde (10 nuevos). Mutaciones: sin normalizar el id → 4 tests fallan; sin degradar las estadísticas →
+1 falla. Con la API real: un `GET` con el id en mayúsculas da `MISS` y luego `HIT`, hay una sola clave en Redis, el `PUT` con
+mayúsculas invalida y el ranking no se parte. Newman, dos corridas: 96 aserciones, 0 fallas. `docker compose stop worker-reportes` a
+mitad de un reporte lo termina y sale con código 0.
+
+**Pendiente:** el OK del estudiante para el merge de `develop` a `main` y el mensaje al profesor.

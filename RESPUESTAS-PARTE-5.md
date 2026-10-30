@@ -35,7 +35,7 @@ la auditoría de MongoDB y deja el resultado en la cola. El cliente consulta có
 | El id del reporte es un **UUID** y es el id del trabajo | Se encuentra sin guardar nada más y no es adivinable. Un id que no es UUID da 404 sin consultar Redis (si no, `GET /api/reportes/meta` leería la configuración interna de la cola) |
 | **3 intentos** con espera creciente (1 s, 2 s) y limpieza de trabajos viejos | Un fallo pasajero de CoinGecko no pierde el reporte; Redis no crece sin límite |
 | La cola **falla en el acto** si Redis está caído (`enableOfflineQueue: false`) | Si no, `add` quedaría esperando y la API no podría responder 503. Se midió: falla en 1 ms |
-| Todas las dependencias del generador, el procesador y los eventos **entran por parámetro** | Se prueban sin Redis, sin MongoDB, sin red y sin esperar (55 tests nuevos) |
+| Todas las dependencias del generador, el procesador y los eventos **entran por parámetro** | Se prueban sin Redis, sin MongoDB, sin red y sin esperar (65 tests nuevos) |
 | Redis con **`noeviction`** y AOF | Con la memoria llena rechaza escrituras en vez de borrar claves sin avisar (BullMQ lo exige: no puede perder trabajos), y los datos sobreviven a un reinicio |
 
 ## 2. ¿Qué arquitectura utilizaste?
@@ -63,7 +63,7 @@ fábrica con un Redis falso en los tests; los servicios que escriben solo invali
 | **Observabilidad** | `completed` y `failed` del worker escriben en Winston, con el intento y el motivo | Logs del worker (ver abajo) |
 | **Consistencia** | Elegida: la caché puede quedar desactualizada hasta el TTL | Ver abajo |
 | **Seguridad** | Redis con contraseña, en `127.0.0.1`, que no queda visible en `docker inspect` | `docker-compose.yml` |
-| **Testabilidad** | 242 tests (55 nuevos) sin Redis ni red | `pruebas/` |
+| **Testabilidad** | 252 tests (65 nuevos) sin Redis ni red | `pruebas/` |
 
 **Lo que se ve en el log del worker** (un caso real: CoinGecko respondió 429 por el límite gratuito):
 
@@ -89,6 +89,10 @@ reintentar que dar por bueno un reporte sin constancia.
 
 - **Autenticación y roles** (Parte 6): hoy cualquiera puede pedir reportes, que son la operación más
   cara de la API. Debería ser solo para el ADMIN.
+- **Idempotencia del pedido de reporte:** si Redis responde lento, la API da 503 pero el trabajo puede encolarse igual, y un reintento
+  del cliente genera dos reportes. Se resolvería con una clave de idempotencia que envíe el cliente.
+- **Contador exacto:** el `INCR` en el evento `completed` es *at-most-once* ante una caída del worker (se pierde un conteo) y no es
+  idempotente si un trabajo se reprocesa. Un `SADD` por id de reporte, o contar desde los registros de auditoría, lo corregiría.
 - **Evitar pedidos duplicados:** varios `POST /reporte` seguidos generan varios reportes iguales.
   Se podría deduplicar por ventana de tiempo, o limitar la cantidad de pedidos por usuario.
 - **Reintentos que entiendan el `429`:** la espera de 1–2 s sirve para un fallo pasajero pero no
@@ -130,7 +134,10 @@ reintentar que dar por bueno un reporte sin constancia.
    colección de Postman si se corre muchas veces seguidas; el test ahora informa el motivo.
 8. **Dos procesos con la misma imagen.** → El servicio del worker usa la misma imagen que la API con
    otro `command`, y comparte con ella el bloque de variables del compose (ancla YAML).
-9. **El cierre ordenado del worker.** `docker compose stop` manda `SIGTERM`; `worker.close()` espera al
+9. **Los ids no distinguen mayúsculas en MySQL, pero sí en las claves de Redis.** Lo encontró la revisión de código: `GET /api/activos/ABC…`
+   encuentra al activo `abc…` pero guardaba la caché bajo otra clave, y un `PUT` o `DELETE` con otras mayúsculas dejaba la entrada vieja.
+   → Todo lo que toca Redis usa el id en minúsculas. Verificado con la API real: una sola clave y el `PUT` con mayúsculas invalida.
+10. **El cierre ordenado del worker.** `docker compose stop` manda `SIGTERM`; `worker.close()` espera al
    trabajo en curso. Verificado a mitad de un reporte: termina el reporte, lo cuenta y sale con código 0
    (1,7 s). El `stop_grace_period` es de 40 s para dar margen a reportes más largos.
 

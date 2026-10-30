@@ -39,35 +39,42 @@ export function crearCacheActivos(dependencias: {
     }
   }
 
+  /**
+   * MySQL compara los ids sin distinguir mayusculas (collation `_ci`): `GET /api/activos/ABC...`
+   * encuentra al activo `abc...`. Si la clave de la cache usara el id tal como llega, un mismo
+   * activo tendria varias claves y un PUT o DELETE invalidaria solo una. Por eso TODO lo que
+   * toca Redis usa el id en minusculas (los ids son UUID, que se generan en minusculas).
+   */
+  const normalizar = (id: string): string => id.toLowerCase();
+
   /** El activo guardado, o undefined si no esta en la cache (o Redis no responde). */
   async function leer(id: string): Promise<Activo | undefined> {
-    const texto = await intentar(`No se pudo leer ${PREFIJO_ACTIVO}${id}`, () => redis.get(PREFIJO_ACTIVO + id), null);
+    const clave = PREFIJO_ACTIVO + normalizar(id);
+    const texto = await intentar(`No se pudo leer ${clave}`, () => redis.get(clave), null);
     if (texto === null) return undefined;
 
     try {
       const dato: unknown = JSON.parse(texto);
-      if (typeof dato === "object" && dato !== null && (dato as { id?: unknown }).id === id) {
+      const idGuardado = typeof dato === "object" && dato !== null ? (dato as { id?: unknown }).id : undefined;
+      if (typeof idGuardado === "string" && normalizar(idGuardado) === normalizar(id)) {
         return dato as Activo;
       }
     } catch {
       // cae al aviso de abajo
     }
-    registrador.error(`Dato inválido en la caché (${PREFIJO_ACTIVO}${id}): se lee de MySQL`);
+    registrador.error(`Dato inválido en la caché (${clave}): se lee de MySQL`);
     return undefined;
   }
 
   /** Guarda el activo con TTL: pasado ese tiempo se vuelve a leer de MySQL. */
   async function guardar(activo: Activo): Promise<void> {
-    await intentar(
-      `No se pudo guardar ${PREFIJO_ACTIVO}${activo.id}`,
-      () => redis.set(PREFIJO_ACTIVO + activo.id, JSON.stringify(activo), { EX: ttlSegundos }),
-      undefined,
-    );
+    const clave = PREFIJO_ACTIVO + normalizar(activo.id);
+    await intentar(`No se pudo guardar ${clave}`, () => redis.set(clave, JSON.stringify(activo), { EX: ttlSegundos }), undefined);
   }
 
   /** Suma una consulta al ranking de activos mas consultados (ZINCRBY, atomico). */
   async function contarConsulta(id: string): Promise<void> {
-    await intentar("No se pudo actualizar el ranking", () => redis.zIncrBy(CLAVE_RANKING, 1, id), 0);
+    await intentar("No se pudo actualizar el ranking", () => redis.zIncrBy(CLAVE_RANKING, 1, normalizar(id)), 0);
   }
 
   return {
@@ -85,24 +92,25 @@ export function crearCacheActivos(dependencias: {
     async consultar(id: string, cargar: () => Promise<Activo>): Promise<{ activo: Activo; cache: "HIT" | "MISS" }> {
       const enCache = await leer(id);
       if (enCache !== undefined) {
-        await contarConsulta(id);
+        void contarConsulta(id); // el ranking es una estadistica: no se espera, y nunca rechaza
         return { activo: enCache, cache: "HIT" };
       }
 
       const activo = await cargar();
-      await guardar(activo);
-      await contarConsulta(id);
+      await guardar(activo); // este si se espera: asi la lectura siguiente ya es un HIT
+      void contarConsulta(id);
       return { activo, cache: "MISS" };
     },
 
     /** Saca el activo de la cache (despues de un PUT o un DELETE confirmado en MySQL). */
     async invalidar(id: string): Promise<void> {
-      await intentar(`No se pudo invalidar ${PREFIJO_ACTIVO}${id}`, () => redis.del(PREFIJO_ACTIVO + id), 0);
+      const clave = PREFIJO_ACTIVO + normalizar(id);
+      await intentar(`No se pudo invalidar ${clave}`, () => redis.del(clave), 0);
     },
 
     /** Saca el activo del ranking (cuando se elimina). */
     async quitarDelRanking(id: string): Promise<void> {
-      await intentar("No se pudo actualizar el ranking", () => redis.zRem(CLAVE_RANKING, id), 0);
+      await intentar("No se pudo actualizar el ranking", () => redis.zRem(CLAVE_RANKING, normalizar(id)), 0);
     },
   };
 }
