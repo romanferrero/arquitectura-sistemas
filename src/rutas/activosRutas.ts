@@ -3,12 +3,16 @@ import * as controlador from "../controladores/activosControlador.ts";
 import * as auditoria from "../controladores/auditoriaControlador.ts";
 import * as preferencias from "../controladores/preferenciasControlador.ts";
 import * as reportes from "../controladores/reportesControlador.ts";
+import * as usuario from "../controladores/usuarioControlador.ts";
 
 /**
  * Unico lugar donde se define el mapeo verbo HTTP + path -> controlador.
  * Se monta en app.ts bajo el prefijo /api.
  */
 export const activosRutas = Router();
+
+// Quien es el usuario del token y que roles tiene.
+activosRutas.get("/yo", usuario.perfil);
 
 activosRutas.get("/activos", controlador.listar);
 activosRutas.post("/activos", controlador.crear);

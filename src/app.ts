@@ -1,5 +1,6 @@
 import express from "express";
 import { activosRutas } from "./rutas/activosRutas.ts";
+import { autenticar } from "./seguridad/autenticacion.ts";
 import { manejadorErrores, noEncontrado } from "./middlewares/manejadorErrores.ts";
 
 /**
@@ -14,13 +15,15 @@ export const app = express();
 // Parsea el body JSON de las peticiones entrantes.
 app.use(express.json());
 
-// Health check: sirve para verificar rapido que el contenedor esta vivo.
+// Health check: sirve para verificar rapido que el contenedor esta vivo. Es PUBLICO: lo usan
+// Docker y los monitores, que no tienen un token.
 app.get("/salud", (_req, res) => {
   res.status(200).json({ estado: "ok", fecha: new Date().toISOString() });
 });
 
-// Todas las rutas de la API cuelgan de /api.
-app.use("/api", activosRutas);
+// Todas las rutas de la API cuelgan de /api y EXIGEN un token valido (Authorization: Bearer).
+// El middleware va antes que las rutas: sin token no se llega a ningun controlador.
+app.use("/api", autenticar, activosRutas);
 
 // Si ninguna ruta coincidio -> 404.
 app.use(noEncontrado);
