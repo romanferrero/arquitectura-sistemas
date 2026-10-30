@@ -75,6 +75,47 @@ describe("crearCacheActivos", () => {
     expect(await cache.leer("id-btc")).toBeUndefined();
   });
 
+  describe("ids con distintas mayúsculas (MySQL no las distingue)", () => {
+    const idEnMayusculas = "ID-BTC";
+
+    test("el mismo activo usa siempre la misma clave, venga el id como venga", async () => {
+      const { cache, textos } = armar();
+      await cache.guardar(bitcoin);
+
+      expect(await cache.leer(idEnMayusculas)).toEqual(bitcoin);
+      expect([...textos.keys()]).toEqual(["activo:id-btc"]);
+    });
+
+    test("invalidar con otras mayúsculas igual borra la entrada", async () => {
+      const { cache } = armar();
+      await cache.guardar(bitcoin);
+
+      await cache.invalidar(idEnMayusculas);
+
+      expect(await cache.leer("id-btc")).toBeUndefined();
+    });
+
+    test("el ranking no se parte en una entrada por cada variante", async () => {
+      const { cache, rankings } = armar();
+
+      await cache.contarConsulta("id-btc");
+      await cache.contarConsulta(idEnMayusculas);
+      await cache.quitarDelRanking("Id-Btc");
+
+      expect(rankings.get(CLAVE_RANKING)?.size).toBe(0);
+    });
+
+    test("una lectura con otras mayúsculas es un HIT y no un 'dato inválido'", async () => {
+      const { cache, lineas } = armar();
+      await cache.consultar("id-btc", async () => bitcoin);
+
+      const resultado = await cache.consultar(idEnMayusculas, async () => bitcoin);
+
+      expect(resultado.cache).toBe("HIT");
+      expect(lineas).toEqual([]);
+    });
+  });
+
   describe("consultar (cache-aside)", () => {
     test("la primera lectura va al origen (MISS) y la guarda; la segunda sale de la caché (HIT)", async () => {
       const { cache, ttl } = armar();
