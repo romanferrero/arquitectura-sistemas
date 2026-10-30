@@ -12,6 +12,7 @@ import { registradorDe } from "../config/logger.ts";
 import { camposModificados } from "../utilidades/camposModificados.ts";
 import { redondear } from "../utilidades/redondear.ts";
 import { auditoria } from "./auditoriaServicio.ts";
+import { cacheActivos } from "./cacheActivosServicio.ts";
 
 /**
  * Reglas de negocio del CRUD. Esta capa no conoce `req` ni `res`.
@@ -36,6 +37,28 @@ export async function obtenerActivo(id: string): Promise<Activo> {
     throw new ErrorApi(404, `No existe un activo con id ${id}`);
   }
   return activo;
+}
+
+/**
+ * Lectura de un activo por id con cache (cache-aside): primero Redis; si no esta, MySQL, y
+ * el resultado se guarda en Redis con TTL. Devuelve tambien si salio de la cache, para que
+ * el controlador lo informe en el header `X-Cache`.
+ *
+ * Solo la LECTURA PUBLICA usa la cache. El resto de las operaciones (actualizar, eliminar,
+ * precio) leen de MySQL, que es la fuente de verdad: no pueden decidir con un dato viejo.
+ * Si Redis falla, la cache lo absorbe y esto se comporta como una lectura normal de MySQL.
+ */
+export async function consultarActivo(id: string): Promise<{ activo: Activo; cache: "HIT" | "MISS" }> {
+  const enCache = await cacheActivos.leer(id);
+  if (enCache !== undefined) {
+    await cacheActivos.contarConsulta(id);
+    return { activo: enCache, cache: "HIT" };
+  }
+
+  const activo = await obtenerActivo(id); // 404 si no existe: lo inexistente no se cuenta ni se guarda
+  await cacheActivos.guardar(activo);
+  await cacheActivos.contarConsulta(id);
+  return { activo, cache: "MISS" };
 }
 
 // Campos del activo que el cliente puede cambiar; sirven para decir que se modifico.
@@ -112,6 +135,7 @@ export async function actualizarActivo(id: string, cuerpo: unknown): Promise<Act
 
   // `despues` es lo que quedo en la base, no lo que se intento guardar.
   const { antes, despues } = reemplazo;
+  await cacheActivos.invalidar(id); // la proxima lectura trae el dato nuevo
   await auditoria.registrar({
     operacion: "ACTUALIZAR",
     entidadId: despues.id,
@@ -129,6 +153,8 @@ export async function eliminarActivo(id: string): Promise<void> {
   if (!(await repositorio.eliminar(id))) {
     throw new ErrorApi(404, `No existe un activo con id ${id}`); // lo borro otro mientras tanto
   }
+  await cacheActivos.invalidar(id);
+  await cacheActivos.quitarDelRanking(id);
   await auditoria.registrar({ operacion: "ELIMINAR", entidadId: id, antes: actual, metadatos: { origen: "API" } });
 }
 
