@@ -3,6 +3,7 @@ import { env, mongoUri } from "./config/env.ts";
 import { logger } from "./config/logger.ts";
 import { cerrarConexiones, conectarMongo, conectarMysql } from "./datos/conexiones.ts";
 import { describirError } from "./datos/describirError.ts";
+import { cerrarColaReportes } from "./colas/colaReportes.ts";
 import { cerrarRedis, conectarRedis } from "./datos/redis.ts";
 import { migrar } from "./datos/migrar.ts";
 
@@ -60,9 +61,9 @@ async function arrancar(): Promise<void> {
   process.on("SIGINT", () => cerrar("SIGINT"));
 }
 
-/** Cierra las tres conexiones, aunque alguna falle al cerrarse. */
+/** Cierra las conexiones (bases, Redis y la cola), aunque alguna falle al cerrarse. */
 async function cerrarTodo(): Promise<void> {
-  await Promise.allSettled([cerrarConexiones(), cerrarRedis()]);
+  await Promise.allSettled([cerrarConexiones(), cerrarRedis(), cerrarColaReportes()]);
 }
 
 arrancar().catch(async (error: unknown) => {

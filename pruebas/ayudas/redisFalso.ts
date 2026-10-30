@@ -36,6 +36,20 @@ export function crearRedisFalso() {
       ttl.delete(clave);
       return textos.delete(clave) ? 1 : 0;
     },
+    async incr(clave) {
+      usar(`INCR ${clave}`);
+      const nuevo = Number(textos.get(clave) ?? "0") + 1;
+      textos.set(clave, String(nuevo));
+      return nuevo;
+    },
+    async zRangeWithScores(clave, inicio, fin, opciones) {
+      usar(`ZRANGE ${clave} ${inicio} ${fin}${opciones?.REV === true ? " REV" : ""}`);
+      const ordenados = [...(rankings.get(clave) ?? new Map<string, number>())]
+        .map(([value, score]) => ({ value, score }))
+        .sort((a, b) => a.score - b.score);
+      if (opciones?.REV === true) ordenados.reverse();
+      return ordenados.slice(inicio, fin + 1);
+    },
     async zIncrBy(clave, incremento, miembro) {
       usar(`ZINCRBY ${clave} ${incremento} ${miembro}`);
       const ranking = rankings.get(clave) ?? new Map<string, number>();
