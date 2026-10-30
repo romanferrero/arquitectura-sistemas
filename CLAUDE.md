@@ -37,6 +37,7 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
 | `npm run build` | Compila a `dist/` |
 | `docker compose up -d --build --wait` | Levanta la API, MySQL, MongoDB y Redis (Docker Desktop tiene que estar prendido) |
 | `docker compose up -d --wait mysql mongodb redis` | Solo las bases (la API con `npm run dev`) |
+| `npm run idp:falso` | Proveedor de identidad falso (solo desarrollo): sirve las claves y emite tokens de prueba sin cuenta de Auth0 |
 | `npm run worker` | Worker de la cola de reportes (BullMQ); en Docker es el servicio `worker-reportes` |
 | `npm run migrar` / `migrar:deshacer` / `migrar:estado` | Migraciones de MySQL |
 | `npm run db:verificar` | Comprueba que la app llegue a las tres bases |
@@ -67,4 +68,9 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
   **worker** es otro proceso (`src/procesos/workerReportes.ts`, misma imagen, otro comando). BullMQ usa `ioredis` (el adaptador
   del cliente `redis` no resistió una caída de Redis); la lógica del reporte vive en `src/reportes/` con todo por parámetro.
   Un fallo al auditar un reporte hace fallar el trabajo (a diferencia del CRUD).
+- Autenticación (Parte 6): todo `/api` exige `Authorization: Bearer <JWT>`; solo `/salud` es público. La API **verifica**
+  (`jose` + JWKS, `src/seguridad/`) y no emite nada: los tokens y los roles los pone Auth0 (`AUTH0.md`). Las variables
+  `AUTH_*` se leen con `authConfig()`. El verificador y el middleware son fábricas (la clave entra por parámetro) y se
+  prueban con claves generadas al momento, sin red. `herramientas/idpFalso.ts` es solo desarrollo y no entra en la imagen.
+  Con `pm.sendRequest` en Postman hay que mandar el token a mano: no hereda la autenticación de la colección.
 - Tests en `pruebas/`, importando `describe`/`test`/`expect` desde `@jest/globals`.

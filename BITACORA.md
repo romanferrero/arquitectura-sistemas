@@ -23,7 +23,7 @@ usó ninguna skill.
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
 correr la colección de Postman, **Docker Compose**, **Jest** y pruebas de mutación hechas a mano.
 
-Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9, 10 y
+Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9, 10, 11 y
 las revisiones). Esfuerzo alto en todo, salvo la sesión 8 (planificación de las Partes 5 a 8), que fue extra alto.
 
 ---
@@ -775,3 +775,63 @@ mayúsculas invalida y el ranking no se parte. Newman, dos corridas: 96 asercion
 mitad de un reporte lo termina y sale con código 0.
 
 **Pendiente:** el OK del estudiante para el merge de `develop` a `main` y el mensaje al profesor.
+
+---
+
+## Sesión 11 — Auth0 y middleware JWT · 2026-10-30
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (la misma sesión que las 9 y 10; el plan sugería Opus 5.5 para esta sesión por
+  ser seguridad, pero el estudiante siguió con Sonnet).
+- **Modo:** implementación, en `feature/sesion-11-auth0-jwt`.
+- **Herramientas:** edición de archivos, `npm install jose`, Docker Compose, `curl`, Newman y pruebas de mutación a mano. Sin skills
+  ni subagentes (el `/code-review` y el `/security-review` de cierre de la Parte 6 van en la sesión 12). Docker Desktop estaba apagado
+  (la compu se reinició): Claude lo prendió.
+
+**Qué se hizo**
+- [src/seguridad/verificadorJwt.ts](src/seguridad/verificadorJwt.ts): verifica el JWT con `jose` (firma con las JWKS, solo `RS256`,
+  `iss`, `aud`, `exp`, `nbf`, `sub`) y devuelve `{ sub, roles }`. 401 si el token es inválido o venció; 503 si no se pueden bajar las claves.
+- [src/middlewares/autenticacion.ts](src/middlewares/autenticacion.ts): exige `Authorization: Bearer <token>`, deja al usuario en la
+  petición y responde 401 con `WWW-Authenticate`. Todo `/api` pasa por él; `/salud` sigue público. `GET /api/yo` muestra quién es el usuario.
+- [src/seguridad/autenticacion.ts](src/seguridad/autenticacion.ts): el cableado con `createRemoteJWKSet` (claves en memoria, 3 s de
+  tiempo máximo, descarga como mucho cada 30 s ante un `kid` desconocido).
+- Variables `AUTH_ISSUER`, `AUTH_AUDIENCE`, `AUTH_JWKS_URL`, `AUTH_CLAIM_ROLES`; [AUTH0.md](AUTH0.md) con la guía paso a paso.
+- [herramientas/idpFalso.ts](herramientas/idpFalso.ts) (`npm run idp:falso`): proveedor de identidad falso para desarrollo.
+- Postman: autenticación a nivel de colección, `T1`–`T3` (piden los tokens) y 4 requests de 401; entornos de ejemplo y del proveedor falso.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| Auth0 (opción B) | Estudiante (sesión 8) | Es la recomendada por la letra |
+| La API solo **verifica**; no emite tokens ni guarda usuarios | Claude (según el plan) | Es lo que significa delegar la autenticación |
+| Algoritmo fijo `RS256` | Claude | Sin lista cerrada, `alg: none` o la confusión HS256/RS256 podrían pasar |
+| 503 (y no 401) si no se pueden bajar las claves | Claude | Es una falla del proveedor, no del cliente |
+| El mensaje de un token inválido no dice qué falló; el de uno vencido sí | Claude | Lo primero no ayuda a un atacante; lo segundo le sirve al cliente legítimo para renovarlo |
+| Los roles se leen de un claim configurable; los que no se conocen se descartan | Claude | No se ata la app a Auth0 ni se confía en roles inventados |
+| Un usuario autenticado **sin roles** es válido (queda para la autorización decidir qué puede hacer) | Claude | La autenticación solo dice *quién* es |
+| Proveedor de identidad falso como herramienta de desarrollo, fuera de `src/` y de la imagen | Claude, **a validar** | Permite probar de punta a punta, y correr Newman y k6 después, sin cuenta externa ni credenciales en el repo. Se puede borrar sin tocar nada más |
+| El entorno de Postman con credenciales reales no se versiona (hay un `.ejemplo`) | Claude | Tiene contraseñas |
+
+**Verificación**
+- `npm run check` y `npm test`: 26 suites, **310 tests** en verde (58 nuevos: verificador y middleware, con claves generadas al momento, sin red).
+- Mutaciones (6): sin `issuer`, sin `audience`, tolerancia de reloj enorme, roles sin filtrar, token vencido como 503 y error de red como 401 → las 6 detectadas.
+- Con la API real y el proveedor falso: sin token 401 con `WWW-Authenticate`; token basura, vencido, con esquema `Basic` y con el cuerpo
+  alterado (se hacía pasar por ADMIN) → 401; token válido → 200; `/salud` público; rutas inexistentes dan 404 con token y 401 sin él.
+- **Proveedor caído:** una API que ya tenía las claves en memoria sigue autenticando (200); una que nunca las bajó responde 503 en 21 ms,
+  y sin token o con basura sigue dando 401.
+- Latencia de una petición autenticada con las claves en memoria: ~4 ms.
+- Newman con el proveedor falso, dos corridas: **111 aserciones, 0 fallas** (una corrida previa falló solo en un request de precio por el límite 429 de CoinGecko).
+- Docker: los cinco servicios `healthy` con los valores de ejemplo de Auth0 en el `.env`; sin token → 401.
+
+**Hallazgos**
+- `pm.sendRequest` de Postman **no hereda** la autenticación de la colección: el request de limpieza daba 401 en sus `DELETE` y dejaba
+  datos viejos. Se le manda el token a mano.
+- Con la caché de claves de `jose`, si el proveedor falso se reinicia (claves nuevas con el mismo `kid`), la API sigue con las viejas hasta
+  reiniciarse: es el comportamiento normal de la caché y no ocurre con Auth0, que rota sus claves con `kid` distinto.
+
+**Pendientes**
+- **El estudiante tiene que crear la cuenta de Auth0 siguiendo [AUTH0.md](AUTH0.md) y probar con ella.** La guía se escribió de memoria del
+  panel de Auth0 y **no se pudo probar contra una cuenta real**: los pasos pueden tener diferencias menores. El código se verificó con un
+  proveedor local equivalente, no contra Auth0.
+- Mientras no se complete el `.env` con Auth0, la API arranca pero responde 503 a todo lo que lleve token.
+- Siguiente: sesión 12 (roles y autorización, modo pánico y cierre de la Parte 6).
