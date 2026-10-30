@@ -145,7 +145,7 @@ describe("listar", () => {
 
     await expect(servicio.listar({ operacion: "BORRAR" })).rejects.toMatchObject({
       estado: 400,
-      detalles: ["operacion debe ser una de: CREAR, ACTUALIZAR, ELIMINAR"],
+      detalles: ["operacion debe ser una de: CREAR, ACTUALIZAR, ELIMINAR, GENERAR_REPORTE"],
     });
     expect(llamadas).toEqual([]); // ni se consulto a la base
   });
@@ -172,7 +172,7 @@ describe("listar", () => {
     const { servicio } = armar();
 
     await expect(servicio.listar({ operacion: "x", limite: "0" })).rejects.toMatchObject({
-      detalles: ["operacion debe ser una de: CREAR, ACTUALIZAR, ELIMINAR", "limite debe ser un entero entre 1 y 200"],
+      detalles: ["operacion debe ser una de: CREAR, ACTUALIZAR, ELIMINAR, GENERAR_REPORTE", "limite debe ser un entero entre 1 y 200"],
     });
   });
 });

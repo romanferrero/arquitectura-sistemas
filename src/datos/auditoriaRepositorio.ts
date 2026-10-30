@@ -13,12 +13,12 @@ import { RegistroAuditoriaModelo } from "./modelos/registroAuditoriaModelo.ts";
  */
 
 export async function registrar(registro: NuevoRegistroAuditoria): Promise<void> {
-  await RegistroAuditoriaModelo.create({ ...registro, entidad: "Activo", ocurridoEn: new Date() });
+  await RegistroAuditoriaModelo.create({ ...registro, entidad: registro.entidad ?? "Activo", ocurridoEn: new Date() });
 }
 
-/** El historial de un activo, del evento mas reciente al mas viejo. */
+/** El historial de un activo, del evento mas reciente al mas viejo. No incluye los reportes. */
 export async function historialDe(entidadId: string): Promise<RegistroAuditoria[]> {
-  const documentos = await RegistroAuditoriaModelo.find({ entidadId })
+  const documentos = await RegistroAuditoriaModelo.find({ entidadId, entidad: "Activo" })
     .sort({ ocurridoEn: -1, _id: -1 })
     .lean<DocumentoLeido[]>();
   return documentos.map(documentoARegistro);

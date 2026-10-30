@@ -11,20 +11,24 @@
 # las bases se publican solo en 127.0.0.1: no quedan expuestos al resto de la red.
 name: portafolio-cripto
 
+# Lo que cambia DENTRO de la red de Docker: alli las bases no estan en localhost sino bajo el
+# nombre de su servicio, y se llega por el puerto interno del contenedor (no por el que se
+# publica al host). Lo comparten la API y el worker.
+x-entorno-en-docker: &entorno_en_docker
+  MYSQL_HOST: mysql
+  MYSQL_PORT: "3306"
+  MONGO_HOST: mongodb
+  MONGO_PORT: "27017"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+
 services:
   api:
     build: .
-    # Carga el .env completo y despues pisa lo que cambia DENTRO de la red de Docker:
-    # alli las bases no estan en localhost sino bajo el nombre de su servicio, y se
-    # llega por el puerto interno del contenedor (no por el que se publica al host).
+    image: portafolio-cripto-api
+    # Carga el .env completo y despues pisa lo que cambia dentro de la red de Docker.
     env_file: .env
-    environment:
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MONGO_HOST: mongodb
-      MONGO_PORT: "27017"
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
+    environment: *entorno_en_docker
     ports:
       - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
     depends_on:
@@ -40,6 +44,28 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    restart: unless-stopped
+
+  # Worker de la cola de reportes: MISMA imagen que la API, otro comando. Es un proceso aparte:
+  # se puede detener, reiniciar o escalar sin tocar la API. No publica puertos. Espera a que la
+  # API este sana porque ella aplica las migraciones (la tabla `activos` tiene que existir).
+  worker-reportes:
+    build: .
+    image: portafolio-cripto-api
+    command: ["node", "dist/procesos/workerReportes.js"]
+    env_file: .env
+    environment: *entorno_en_docker
+    depends_on:
+      api:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # `docker compose stop` manda SIGTERM: el worker termina el reporte en curso antes de salir.
+    stop_grace_period: 40s
     restart: unless-stopped
 
   mysql:

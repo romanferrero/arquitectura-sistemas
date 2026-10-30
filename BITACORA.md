@@ -22,7 +22,7 @@ usó ninguna skill.
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
 correr la colección de Postman, **Docker Compose**, **Jest** y pruebas de mutación hechas a mano.
 
-Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9 y
+Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9, 10 y
 las revisiones). Esfuerzo alto en todo, salvo la sesión 8 (planificación de las Partes 5 a 8), que fue extra alto.
 
 ---
@@ -681,4 +681,70 @@ Pub/Sub) vuelve sobre cómo sincronizar la caché.
   no tiene una fase de inicialización como esas.
 - Los contenedores quedan corriendo al cerrar la sesión.
 - Siguiente: sesión 10 (BullMQ: cola de reportes y worker), que cierra la Parte 5.
+
+---
+
+## Sesión 10 — BullMQ: cola de reportes y worker · 2026-10-30
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (igual que la sesión 9; el estudiante dijo "seguimos" después de que se
+  apagó la computadora y no se cambió nada).
+- **Modo:** implementación, en `feature/sesion-10-bullmq-reportes`.
+- **Contexto:** antes de empezar se comprobó que el repo, `develop` publicada y los volúmenes de Docker estaban intactos tras
+  el apagón (los contenedores se reiniciaron solos).
+- **Herramientas:** edición de archivos, `npm install` (`bullmq`, `ioredis`), Docker Compose, `redis-cli` y `mongosh` dentro de
+  los contenedores, `curl`, Newman y scripts descartables de prueba de humo. Sin skills ni subagentes (el `/code-review` de
+  cierre de la Parte 5 se registra aparte).
+
+**Qué se hizo**
+- Cola `cola-reportes` con BullMQ: [src/colas/colaReportes.ts](src/colas/colaReportes.ts) (productor) y
+  [src/servicios/crearServicioReportes.ts](src/servicios/crearServicioReportes.ts).
+- `POST /api/activos/reporte` → **202** con `Location` y el id; `GET /api/reportes/:id` → estado (`en_cola`, `procesando`,
+  `completado`, `fallido`), progreso, resultado o motivo; `GET /api/estadisticas` → reportes exitosos y los 5 activos más consultados.
+- [src/reportes/](src/reportes/): `generarReporte` (valoración masiva con una sola llamada a CoinGecko, demora simulada y
+  progreso), `procesadorReporte` (genera + audita), `eventosWorker` (`completed` / `failed` a Winston, `INCR` del contador) y
+  `estadoReporte`. Todo con dependencias por parámetro.
+- Worker como proceso aparte: [src/procesos/workerReportes.ts](src/procesos/workerReportes.ts), `npm run worker` y servicio
+  `worker-reportes` en el compose (misma imagen, otro comando).
+- `preciosServicio.obtenerPrecios` (varios símbolos, una llamada); auditoría con `GENERAR_REPORTE` y entidad `Reporte`.
+- 5 requests de Postman nuevos (con *polling*), README (cola, worker, tabla "letra → proyecto") y
+  [RESPUESTAS-PARTE-5.md](RESPUESTAS-PARTE-5.md).
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| BullMQ en lugar de Bull | Estudiante, a propuesta de Claude (sesión 8) | Bull está en mantenimiento |
+| BullMQ con **`ioredis`**, no con el cliente oficial `redis` (**cambia el plan**) | Claude | El plan decía que BullMQ "trae `ioredis`"; en la versión 6 es opcional. Se probó el adaptador del cliente oficial con un script: el flujo normal anduvo pero una caída de Redis tumbaba el proceso y la recuperación no fue limpia. Con `ioredis` el mismo guion pasó completo |
+| El worker es otro proceso, misma imagen | Claude (según el plan) | Se detiene o reinicia sin tocar la API; no se multiplica con el cluster de la Parte 8 |
+| Un fallo al auditar un reporte **hace fallar el trabajo** | Claude | Un reporte se regenera y la cola reintenta; a diferencia del CRUD no hay una operación irreversible detrás |
+| La cola falla en el acto con Redis caído (`enableOfflineQueue: false`) → 503 | Claude | Si no, `add` queda esperando y la API no puede responder |
+| Un id de reporte que no es UUID da 404 sin consultar Redis | Claude | `GET /api/reportes/meta` habría leído la configuración interna de la cola |
+| 3 intentos con espera 1 s y 2 s; trabajos terminados se borran a la hora, los fallidos al día | Claude | Fallos pasajeros no pierden el reporte; Redis no crece sin límite |
+| Los símbolos sin cotización van a `sinPrecio` y no hacen fallar el reporte | Claude | Un símbolo raro no debe invalidar todo el portafolio |
+| El resultado del reporte vive en el trabajo (Redis), no en una base | Claude | Alcanza para la letra; queda como mejora |
+| Los requests de Postman se agregan en esta sesión | Claude | Cada sesión deja la colección en verde |
+
+**Verificación**
+- `npm run check` y `npm run build` sin errores; `npm test`: 23 suites, **242 tests** en verde (55 nuevos: generador, procesador,
+  eventos, servicio de reportes, estadísticas, estados y configuración de la cola).
+- Prueba de humo previa contra el Redis real (BullMQ + `ioredis`): éxito con progreso, reintentos, `add` con Redis caído falla en
+  1 ms, y tras volver Redis el productor y el worker siguen funcionando.
+- En Docker (API + worker + 3 bases, todo `healthy`): `POST` → 202 en 0,2 s; el seguimiento muestra `procesando` 10 % → 53 % →
+  78 % → `completado`; el resultado valúa BTC y ETH y deja `RARO` en `sinPrecio`; el log dice `completado` con el contador en 1;
+  en MongoDB hay un `GENERAR_REPORTE` sobre la entidad `Reporte`.
+- **CoinGecko roto** (worker apuntando a una URL que no responde): 3 intentos con espera creciente, estado `fallido` con el motivo,
+  el contador no cambia y no hay registro de auditoría.
+- **Worker detenido:** el pedido queda `en_cola` y se procesa al volver el worker.
+- **Cierre ordenado:** `docker compose stop worker-reportes` a mitad de un reporte lo termina y sale con código 0 en 1,7 s.
+- **Redis detenido:** `POST /api/activos/reporte`, `GET /api/reportes/:id` y `GET /api/estadisticas` → 503; `GET /api/activos`
+  (MySQL) → 200; al volver Redis todo se recupera solo.
+- Newman, dos corridas seguidas, API en Docker: 96 y 95 aserciones, 0 fallas (la diferencia es el *polling*).
+
+**Hallazgos y pendientes**
+- **Límite gratuito de CoinGecko (HTTP 429):** una corrida de Newman hizo fallar un reporte tras 3 intentos. El sistema se
+  comportó como debe, pero deja la colección intermitente si se corre muchas veces seguidas; el test ahora informa el motivo y
+  el README lo advierte. Mejora anotada: respetar `Retry-After` y cachear cotizaciones en Redis.
+- **Nunca se probó más de un worker a la vez**, ni el `INCR` bajo concurrencia real; se afirma solo que es atómico por el comando.
+- `POST /api/activos/reporte` es la operación más cara de la API y hoy no tiene autenticación: la Parte 6 la deja solo para el ADMIN.
+- Siguiente: cierre de la Parte 5 (`/code-review`, correcciones, OK del estudiante, merge a `main` y mensaje al profesor).
 

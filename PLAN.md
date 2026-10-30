@@ -7,7 +7,7 @@ El plan de las Partes 3 y 4 (ya en `main`) está archivado en [PLAN-PARTES-3-4.m
 - [x] Sesiones 0 a 7 — Partes 3 y 4 (en `main`, commit `3297718`)
 - [x] Sesión 8 — Planificación de las Partes 5 a 8
 - [x] Sesión 9 — Redis: infraestructura, caché, preferencias y ranking
-- [ ] Sesión 10 — BullMQ: cola de reportes, worker y cierre de la **Parte 5**
+- [x] Sesión 10 — BullMQ: cola de reportes, worker (falta el cierre de la **Parte 5**: revisión y merge a `main`)
 - [ ] Sesión 11 — Auth0 y middleware JWT (JWKS)
 - [ ] Sesión 12 — RBAC, modo pánico y cierre de la **Parte 6**
 - [ ] Sesión 13 — CQRS: comandos, consultas y publicación de eventos
@@ -117,8 +117,9 @@ entrada en `BITACORA.md`. Al empezar me decís modelo y esfuerzo.
 - Tests con un Redis falso: hit, miss, Redis caído, invalidación, preferencias.
 
 ### Sesión 10 — BullMQ: cola de reportes, worker y cierre de la Parte 5
-- `bullmq` (trae `ioredis`; se documenta que conviven dos clientes: el oficial para lo que pide
-  la letra y el interno de BullMQ).
+- `bullmq` + `ioredis` (en BullMQ 6 `ioredis` es una dependencia opcional, no viene incluida; se probó el adaptador del
+  cliente oficial y no resistió una caída de Redis). Conviven dos clientes: el oficial para lo que pide la letra y
+  `ioredis` dentro de BullMQ.
 - `src/colas/colaReportes.ts`: `cola-reportes`, 3 intentos con backoff, limpieza de jobs viejos.
 - `POST /api/activos/reporte` → 202 + `Location` + `{ idReporte, estado: "en_cola" }`;
   `GET /api/reportes/:id` → estado (`en_cola | procesando | completado | fallido`), progreso,

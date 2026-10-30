@@ -49,7 +49,39 @@ export async function obtenerPrecio(simbolo: string): Promise<number> {
     );
   }
 
-  const url = `${env.API_PRECIOS_URL}?ids=${idMoneda}&vs_currencies=${env.MONEDA}`;
+  const datos = await consultarCoinGecko([idMoneda]);
+
+  // El JSON llega como `unknown`: hay que comprobar su forma antes de usarlo.
+  const precio = extraerPrecio(datos, idMoneda, env.MONEDA);
+  if (precio === undefined) {
+    throw new ErrorApi(502, "La API de precios devolvió una respuesta inesperada");
+  }
+
+  return precio;
+}
+
+/**
+ * Cotizaciones de varios simbolos en UNA sola llamada a CoinGecko (la usa el reporte de
+ * valoracion, que no puede pedir una cotizacion por activo). Devuelve solo los simbolos que
+ * se pudieron cotizar: los que no estan en el mapa o que CoinGecko no devolvio quedan fuera
+ * y quien llama decide que hacer con ellos. Si CoinGecko falla, lanza 502.
+ */
+export async function obtenerPrecios(simbolos: string[]): Promise<Map<string, number>> {
+  const soportados = [...new Set(simbolos)].filter((simbolo) => IDS_COINGECKO[simbolo] !== undefined);
+  const precios = new Map<string, number>();
+  if (soportados.length === 0) return precios; // nada que cotizar: no se llama a CoinGecko
+
+  const datos = await consultarCoinGecko(soportados.map((simbolo) => IDS_COINGECKO[simbolo] as string));
+  for (const simbolo of soportados) {
+    const precio = extraerPrecio(datos, IDS_COINGECKO[simbolo] as string, env.MONEDA);
+    if (precio !== undefined) precios.set(simbolo, precio);
+  }
+  return precios;
+}
+
+/** Hace la llamada a CoinGecko y devuelve el JSON. Todo lo que falle ahi es un 502. */
+async function consultarCoinGecko(ids: string[]): Promise<unknown> {
+  const url = `${env.API_PRECIOS_URL}?ids=${ids.join(",")}&vs_currencies=${env.MONEDA}`;
 
   let respuesta: Response;
   try {
@@ -69,20 +101,11 @@ export async function obtenerPrecio(simbolo: string): Promise<number> {
 
   // Tambien puede fallar al leer el cuerpo (no es JSON, o salta el timeout):
   // es una falla del tercero, asi que corresponde 502 y no un 500.
-  let datos: unknown;
   try {
-    datos = await respuesta.json();
+    return await respuesta.json();
   } catch {
     throw new ErrorApi(502, "La API de precios devolvió una respuesta que no es JSON válido");
   }
-
-  // El JSON llega como `unknown`: hay que comprobar su forma antes de usarlo.
-  const precio = extraerPrecio(datos, idMoneda, env.MONEDA);
-  if (precio === undefined) {
-    throw new ErrorApi(502, "La API de precios devolvió una respuesta inesperada");
-  }
-
-  return precio;
 }
 
 /** Navega { "bitcoin": { "usd": 63500.12 } } sin recurrir a `any`. */
