@@ -44,10 +44,14 @@ export function crearServicioEstadisticas(dependencias: {
         throw new ErrorApi(503, "Las estadísticas no están disponibles en este momento");
       }
 
-      // El ranking guarda ids; se les agrega el simbolo para que se entienda.
+      // El ranking guarda ids; se les agrega el simbolo para que se entienda. Si MySQL falla, el
+      // dato de Redis sigue siendo valido: se devuelve sin el simbolo en vez de dar un 500.
       const masConsultados = await Promise.all(
         ranking.map(async ({ value, score }) => {
-          const activo = await buscarActivo(value);
+          const activo = await buscarActivo(value).catch((error: unknown) => {
+            registrador.error(`No se pudo buscar el símbolo de ${value}: ${describirError(error)}`);
+            return undefined;
+          });
           return activo === undefined
             ? { id: value, consultas: score }
             : { id: value, simbolo: activo.simbolo, consultas: score };

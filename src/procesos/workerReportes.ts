@@ -83,10 +83,16 @@ async function arrancar(): Promise<void> {
     cerrando = true;
     registrador.info(`${senal} recibida: terminando el trabajo en curso y cerrando`);
     setTimeout(() => process.exit(1), 30_000).unref(); // si algo se cuelga, no esperar para siempre
+    let codigoDeSalida = 0;
     void worker
       .close()
+      .catch((error: unknown) => {
+        // Por ejemplo, Redis caido al apagar: se deja constancia y se cierra igual el resto.
+        codigoDeSalida = 1;
+        registrador.error(`No se pudo cerrar el worker limpiamente: ${describirError(error)}`);
+      })
       .then(() => Promise.allSettled([cerrarConexiones(), cerrarRedis()]))
-      .then(() => process.exit(0));
+      .then(() => process.exit(codigoDeSalida));
   };
   process.on("SIGTERM", () => cerrar("SIGTERM"));
   process.on("SIGINT", () => cerrar("SIGINT"));
