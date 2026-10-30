@@ -793,6 +793,10 @@ sin compilar en desarrollo y compilado en producción:
 
 ### Fuera de alcance (posibles mejoras)
 
+- El contador de reportes exitosos es aproximado: se incrementa al recibir el evento `completed`, así que se pierde un conteo si el
+  worker cae justo en ese momento y se podría duplicar si un trabajo se reprocesa. Un `SADD` por id de reporte lo haría idempotente.
+- Si Redis responde lento (más de 2 s) al pedir un reporte, la API da 503 pero el pedido puede quedar encolado igual: un reintento
+  del cliente generaría dos reportes (con Redis caído no pasa). Se resolvería con una clave de idempotencia enviada por el cliente.
 - Autenticación para `POST /api/activos/reporte`: es la operación más cara de la API y hoy cualquiera puede pedirla (Parte 6).
 - Deduplicar pedidos de reporte repetidos y respetar el `Retry-After` de CoinGecko al reintentar.
 - Invalidación robusta de la caché de activos: hoy depende del TTL si Redis está caído durante un `PUT` o un `DELETE`.

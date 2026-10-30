@@ -61,7 +61,8 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
   local usa `MONGO_PORT=27018` para el contenedor. `.env.example` conserva 27017.
 - Redis (`src/datos/redis.ts`): la caché es de mejor esfuerzo (si falla se sirve desde MySQL, solo se loguea);
   las preferencias no (503). Los servicios reciben los comandos por parámetro (`ComandosRedis`) y los tests usan
-  `pruebas/ayudas/redisFalso.ts`. Las variables `REDIS_*` se leen con la función `redisUrl()`, no con `env`.
+  `pruebas/ayudas/redisFalso.ts`. Las variables `REDIS_*` se leen con las funciones `redisUrl()` (cliente `redis`) y `redisConfig()` (BullMQ), no con `env`
+  (así `migrar` no las exige).
 - Cola de reportes (BullMQ, Parte 5): la API es el **productor** (`src/colas/`, `servicios/crearServicioReportes.ts`) y el
   **worker** es otro proceso (`src/procesos/workerReportes.ts`, misma imagen, otro comando). BullMQ usa `ioredis` (el adaptador
   del cliente `redis` no resistió una caída de Redis); la lógica del reporte vive en `src/reportes/` con todo por parámetro.
