@@ -1,6 +1,7 @@
 import { Router } from "express";
 import * as controlador from "../controladores/activosControlador.ts";
 import * as auditoria from "../controladores/auditoriaControlador.ts";
+import * as preferencias from "../controladores/preferenciasControlador.ts";
 
 /**
  * Unico lugar donde se define el mapeo verbo HTTP + path -> controlador.
@@ -28,3 +29,7 @@ activosRutas.get("/precios/:simbolo", controlador.precioPorSimbolo);
 
 // Historial general de auditoria, con filtro por operacion y tope de resultados.
 activosRutas.get("/auditoria", auditoria.listarAuditoria);
+
+// Preferencias de la billetera (Hash de Redis).
+activosRutas.get("/preferencias", preferencias.obtener);
+activosRutas.put("/preferencias", preferencias.actualizar);
