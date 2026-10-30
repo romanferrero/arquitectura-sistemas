@@ -37,6 +37,7 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
 | `npm run build` | Compila a `dist/` |
 | `docker compose up -d --build --wait` | Levanta la API, MySQL, MongoDB y Redis (Docker Desktop tiene que estar prendido) |
 | `docker compose up -d --wait mysql mongodb redis` | Solo las bases (la API con `npm run dev`) |
+| `npm run worker` | Worker de la cola de reportes (BullMQ); en Docker es el servicio `worker-reportes` |
 | `npm run migrar` / `migrar:deshacer` / `migrar:estado` | Migraciones de MySQL |
 | `npm run db:verificar` | Comprueba que la app llegue a las tres bases |
 
@@ -61,4 +62,8 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
 - Redis (`src/datos/redis.ts`): la caché es de mejor esfuerzo (si falla se sirve desde MySQL, solo se loguea);
   las preferencias no (503). Los servicios reciben los comandos por parámetro (`ComandosRedis`) y los tests usan
   `pruebas/ayudas/redisFalso.ts`. Las variables `REDIS_*` se leen con la función `redisUrl()`, no con `env`.
+- Cola de reportes (BullMQ, Parte 5): la API es el **productor** (`src/colas/`, `servicios/crearServicioReportes.ts`) y el
+  **worker** es otro proceso (`src/procesos/workerReportes.ts`, misma imagen, otro comando). BullMQ usa `ioredis` (el adaptador
+  del cliente `redis` no resistió una caída de Redis); la lógica del reporte vive en `src/reportes/` con todo por parámetro.
+  Un fallo al auditar un reporte hace fallar el trabajo (a diferencia del CRUD).
 - Tests en `pruebas/`, importando `describe`/`test`/`expect` desde `@jest/globals`.

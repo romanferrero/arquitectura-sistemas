@@ -1,7 +1,7 @@
 # API REST — Portafolio de Criptoactivos
 
 API REST para gestionar un portafolio de criptoactivos, con CRUD completo sobre
-persistencia en MySQL, caché y preferencias en Redis, integración con APIs externas (cotizaciones y tipo de cambio)
+persistencia en MySQL, caché y preferencias en Redis, reportes asíncronos con una cola (BullMQ), integración con APIs externas (cotizaciones y tipo de cambio)
 y procesamiento con el patrón **Pipes & Filters**: un pipeline de ingesta para los activos
 nuevos y otro de análisis de riesgo para lotes.
 
@@ -38,6 +38,7 @@ cp .env.example .env      # en Windows: copy .env.example .env
 | `npm run migrar` | Aplica las migraciones pendientes de MySQL |
 | `npm run migrar:deshacer` | Deshace la última migración aplicada |
 | `npm run migrar:estado` | Lista las migraciones aplicadas y las pendientes |
+| `npm run worker` | Levanta el worker de la cola de reportes (en otra terminal, además de `npm run dev`) |
 | `npm run db:verificar` | Comprueba que MySQL, MongoDB y Redis respondan con la configuración del `.env` |
 
 Los comandos son, en realidad:
@@ -46,6 +47,7 @@ Los comandos son, en realidad:
 node --env-file=.env --watch src/servidor.ts    # dev
 tsc                                             # build
 node --env-file=.env dist/servidor.js           # start
+node --env-file=.env src/procesos/workerReportes.ts   # worker
 node --experimental-vm-modules node_modules/jest/bin/jest.js   # test
 ```
 
@@ -195,6 +197,68 @@ demora las respuestas.
 | `activos:mas-consultados` | Sorted Set | Id del activo → cantidad de consultas |
 | `preferencias:billetera` | Hash | `monedaVisualizacion`, `limiteAlertaUsd` |
 
+### Reportes asíncronos: cola (BullMQ) y worker
+
+Calcular un reporte de todo el portafolio es trabajo lento (consulta precios a un tercero y
+cuenta mucho), y no tiene por qué hacer esperar al cliente. Por eso **la API no lo calcula**: deja
+un pedido en una cola y responde enseguida; otro proceso, el **worker**, lo hace.
+
+```
+POST /api/activos/reporte ──► API (productor) ──► cola-reportes (Redis) ──► worker ──► MongoDB
+        └─ 202 + id al instante                    └─ el pedido queda guardado          (auditoría)
+GET /api/reportes/:id  ◄── estado y progreso, y el resultado cuando termina
+```
+
+```bash
+docker compose up -d --build --wait          # incluye el servicio worker-reportes
+# (o en local: npm run dev  y, en otra terminal, npm run worker)
+
+curl -i -X POST http://localhost:3000/api/activos/reporte        # 202 + Location + { idReporte, estado: "en_cola" }
+curl http://localhost:3000/api/reportes/<idReporte>              # en_cola -> procesando (progreso) -> completado
+curl http://localhost:3000/api/estadisticas                      # reportes exitosos y activos más consultados
+docker compose logs -f worker-reportes                           # los eventos completed / failed
+```
+
+**Estados de un reporte:** `en_cola` (también mientras espera un reintento), `procesando` (con su
+porcentaje), `completado` (trae el `resultado`) y `fallido` (trae el `motivo`). Un id que no existe, o
+que no es un UUID, da 404; con Redis caído, 503.
+
+**Qué contiene el reporte:** el portafolio valuado a precio de mercado, con una sola llamada a CoinGecko:
+`resumen` (costo total, valor actual, ganancia/pérdida y variación %), una entrada por posición, y
+`sinPrecio` con los símbolos que no se pudieron cotizar (no hacen fallar el reporte ni cuentan en los
+totales). La demora del "cálculo complejo" es simulada (`REPORTE_DEMORA_MS`).
+
+**Reintentos y eventos.** Cada trabajo se intenta hasta **3 veces** con espera creciente (1 s, 2 s). Los
+eventos `completed` y `failed` del worker escriben en Winston en cada caso; en `completed` además se
+incrementa el contador `estadisticas:reportes-exitosos` con **`INCR`** (atómico: lo comparten todos los
+procesos y no se pierden incrementos aunque haya varios workers).
+
+```
+[INFO]  WorkerReportes: Generando el reporte d5295196-… (intento 1)
+[INFO]  WorkerReportes: Reporte d5295196-… completado (reportes exitosos hasta ahora: 1)
+[ERROR] WorkerReportes: Reporte e76557de-… falló (intento 1 de 3), se reintenta: No se pudo contactar a la API de precios
+[ERROR] WorkerReportes: Reporte e76557de-… falló definitivamente tras 3 intento(s): No se pudo contactar a la API de precios
+```
+
+**Auditoría.** Al terminar, el worker registra en MongoDB una operación `GENERAR_REPORTE` sobre la entidad
+`Reporte` (con el resumen, el intento y la duración). A diferencia de la auditoría del CRUD, acá un fallo al
+registrar **hace fallar el trabajo** y la cola lo reintenta: un reporte se puede regenerar; una operación
+ya confirmada en MySQL no se puede deshacer.
+
+**El worker es otro proceso**, con la misma imagen y otro comando (`node dist/procesos/workerReportes.js`).
+Se puede detener o reiniciar sin tocar la API (sumar más workers es posible, pero no se probó). Con `docker compose stop worker-reportes` (SIGTERM)
+**termina el reporte en curso** antes de salir. Si el worker está caído, los pedidos esperan en la cola y
+se procesan cuando vuelve.
+
+**Dos clientes de Redis.** La caché, las preferencias y el contador usan el cliente oficial `redis`;
+BullMQ abre sus propias conexiones con `ioredis`. BullMQ 6 también admite el cliente oficial, pero en las
+pruebas una caída de Redis tumbaba el proceso y la recuperación no fue limpia; con `ioredis` sí.
+
+| Clave | Tipo | Contenido |
+|---|---|---|
+| `estadisticas:reportes-exitosos` | String (`INCR`) | Reportes generados con éxito |
+| `bull:cola-reportes:*` | (BullMQ) | Los trabajos, sus estados y resultados |
+
 ---
 
 ## Docker
@@ -207,11 +271,12 @@ docker compose up -d --build --wait     # la API, MySQL, MongoDB y Redis
 curl http://localhost:3000/salud
 ```
 
-`docker-compose.yml` levanta cuatro servicios y espera a que estén sanos:
+`docker-compose.yml` levanta cinco servicios y espera a que estén sanos:
 
 | Servicio | Imagen | Notas |
 |---|---|---|
 | `api` | La del [`Dockerfile`](Dockerfile) (Node 24, multi-stage, usuario sin privilegios) | Arranca recién cuando MySQL, MongoDB y Redis están `healthy`; aplica las migraciones al iniciar |
+| `worker-reportes` | La misma imagen que `api`, con otro comando | Proceso aparte que consume la cola de reportes. Espera a que la API esté sana (ella aplica las migraciones). Sin puertos |
 | `mysql` | `mysql:8.4` | Datos en el volumen `mysql_data` |
 | `mongodb` | `mongo:8.0` | Datos en el volumen `mongodb_data` |
 | `redis` | `redis:7.4-alpine` | Con contraseña y AOF, datos en el volumen `redis_data`. La política `noeviction` hace que, con la memoria llena, rechace escrituras en vez de borrar claves en silencio (lo necesitará la cola de la Parte 5) |
@@ -219,12 +284,13 @@ curl http://localhost:3000/salud
 Los cuatro puertos se publican solo en `127.0.0.1`. La API recibe el mismo `.env` que usás en
 local, pero el compose **pisa** las variables que cambian dentro de la red de Docker: allí las
 bases no están en `localhost` sino bajo el nombre de su servicio (`MYSQL_HOST=mysql`,
-`MONGO_HOST=mongodb`, `REDIS_HOST=redis`) y se llega por el puerto interno (`3306`, `27017`, `6379`), no por el que se
+`MONGO_HOST=mongodb`, `REDIS_HOST=redis`; el bloque lo comparten la API y el worker) y se llega por el puerto interno (`3306`, `27017`, `6379`), no por el que se
 publica al host.
 
 | Comando | Qué hace |
 |---|---|
 | `docker compose logs -f api` | Sigue los logs de la API |
+| `docker compose logs -f worker-reportes` | Sigue los logs del worker (eventos `completed` y `failed`) |
 | `docker compose up -d --wait mysql mongodb redis` | Solo las bases (y la API con `npm run dev`) |
 | `docker compose down` | Baja todo y **conserva** los datos |
 | `docker compose down -v` | Baja todo y **borra** los datos (incluida la caché): el próximo arranque parte de cero |
@@ -265,12 +331,30 @@ Se cargan con el flag **nativo** de Node `--env-file`, sin usar la librería `do
 | `MONGO_INITDB_ROOT_USERNAME`, `MONGO_INITDB_ROOT_PASSWORD` | `mongo_root`, … | Usuario con el que se conecta la aplicación |
 | `REDIS_HOST`, `REDIS_PORT` | `localhost`, `6379` | Dónde está Redis |
 | `REDIS_PASSWORD` | — | Contraseña de Redis (la usa Docker Compose al crear el contenedor y la app al conectarse) |
+| `REPORTE_DEMORA_MS` | `3000` | Demora simulada del worker al generar un reporte (admite 0) |
 | `CACHE_TTL_SEGUNDOS` | `60` | Cuánto vive un activo en la caché antes de releerlo de MySQL |
 | `UMBRAL_MONTO_USD` | `100000` | Monto (en USD) que, superado, dispara la *Whale Alert*. Admite 0 |
 | `UMBRAL_VOLATILIDAD` | `80` | Volatilidad (en %) que, superada, marca un activo como `high_risk` |
 
 Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 (*fail fast*, ver [`src/config/env.ts`](src/config/env.ts)).
+
+---
+
+## Nombres: de la letra al proyecto
+
+La letra usa nombres en inglés; el proyecto mantiene todo en español (como en la Parte 3, donde
+`/assets/analyze` pasó a `/api/activos/analizar`).
+
+| En la letra | En el proyecto |
+|---|---|
+| cola `report-queue` | `cola-reportes` |
+| `POST /assets/report` | `POST /api/activos/reporte` (y `GET /api/reportes/:id` para seguirlo) |
+| Caché de activos (`.set()` / `.get()`) | `GET /api/activos/:id` con `X-Cache` |
+| Preferencias (`.hSet()` / `.hGetAll()`) | `GET` y `PUT /api/preferencias` |
+| contador atómico (`incr`) | `estadisticas:reportes-exitosos` (`GET /api/estadisticas`) |
+| `GET /assets/:id/history` | `GET /api/activos/:id/historial` |
+| `GET /health` | `GET /salud` |
 
 ---
 
@@ -289,6 +373,9 @@ Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 | GET | `/api/auditoria` | Historial general (`?operacion=`, `?limite=`) | 200 | 400, 503 |
 | GET | `/api/activos/:id/precio` | Activo + cotización + rendimiento | 200 | 404, 502 |
 | GET | `/api/precios/:simbolo` | Cotización de un símbolo suelto | 200 | 400, 404, 502 |
+| POST | `/api/activos/reporte` | Pide el Reporte de Valoración Masiva: se encola y responde enseguida (header `Location`) | 202 | 503 |
+| GET | `/api/reportes/:id` | Estado y progreso de un reporte, y su resultado cuando termina | 200 | 404, 503 |
+| GET | `/api/estadisticas` | Reportes exitosos y los 5 activos más consultados (Redis) | 200 | 503 |
 | GET | `/api/preferencias` | Preferencias de la billetera (Redis) | 200 | 503 |
 | PUT | `/api/preferencias` | Cambia las preferencias enviadas (`monedaVisualizacion`, `limiteAlertaUsd`) | 200 | 400, 503 |
 
@@ -298,12 +385,13 @@ Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 |---|---|
 | 200 | GET o PUT exitoso |
 | 201 | POST exitoso (incluye header `Location`) |
+| 202 | El pedido de reporte quedó en la cola; el reporte todavía no existe (incluye `Location`) |
 | 204 | DELETE exitoso (sin cuerpo) |
 | 400 | Datos inválidos, JSON malformado, símbolo con formato inválido |
 | 404 | Id inexistente, ruta inexistente, o símbolo sin cotización disponible |
 | 409 | Ya existe un activo con ese símbolo |
 | 502 | La API externa de precios o de tipo de cambio falló (timeout, red, respuesta inesperada) |
-| 503 | MongoDB no responde y se pidió el historial de auditoría, o Redis no responde y se pidieron las preferencias |
+| 503 | MongoDB no responde y se pidió el historial de auditoría, o Redis no responde y se pidieron las preferencias, las estadísticas o un reporte (la cola vive en Redis) |
 | 500 | Error no controlado |
 
 ### Formato de error
@@ -524,6 +612,9 @@ src/
 │   ├── modelos/activoModelo.ts    # modelo Sequelize de la tabla activos
 │   ├── migraciones/               # cambios de esquema versionados (up / down)
 │   └── migrar.ts, migrarCli.ts    # ejecutor de migraciones (Umzug) y su comando
+├── colas/colaReportes.ts          # la cola de BullMQ vista desde la API (productor)
+├── reportes/                      # generarReporte, procesadorReporte, eventosWorker, estadoReporte (sin Redis ni bases: dependencias por parámetro)
+├── procesos/workerReportes.ts     # punto de entrada del worker (proceso aparte)
 ├── pipeline/
 │   ├── pipeline.ts                # runner genérico: Filtro y Pipeline
 │   ├── ingesta/                   # validación → normalización → conversión de moneda
@@ -537,9 +628,11 @@ src/
 │   ├── crearCacheActivos.ts       # caché cache-aside (String + TTL) y ranking (Sorted Set), de mejor esfuerzo
 │   ├── cacheActivosServicio.ts    # esa fábrica ya conectada a Redis
 │   ├── crearServicioPreferencias.ts, preferenciasServicio.ts   # preferencias (Hash de Redis)
+│   ├── crearServicioReportes.ts, reportesServicio.ts           # pedir y consultar reportes (productor de la cola)
+│   ├── crearServicioEstadisticas.ts, estadisticasServicio.ts   # reportes exitosos (INCR) y ranking
 │   ├── preciosServicio.ts         # llamada a CoinGecko
 │   └── tasasServicio.ts           # llamada a la API de tipo de cambio
-├── controladores/                 # activos, auditoría y preferencias
+├── controladores/                 # activos, auditoría, preferencias y reportes
 ├── rutas/activosRutas.ts
 ├── errores/ErrorApi.ts
 ├── utilidades/                    # redondear.ts, camposModificados.ts
@@ -560,6 +653,7 @@ Cliente → rutas → controlador → servicio → pipeline de ingesta → repos
                                     │            └──→ auditoría → MongoDB (mejor esfuerzo)
                                     │            └──→ caché → Redis (GET por id; mejor esfuerzo)
                                     ├────→ preferencias → Redis
+                                    └────→ reportes → cola (BullMQ/Redis) ··· worker → preciosServicio + MongoDB
                                     ├────→ pipeline de análisis (lote → reporte)
                                     └────→ preciosServicio → CoinGecko
 
@@ -579,8 +673,10 @@ Cualquier throw de ErrorApi → manejadorErrores → { "error": { ... } }
 1. Levantar la API (`npm run dev`).
 2. En Postman: **Import** → seleccionar
    [`postman/portafolio-cripto.postman_collection.json`](postman/portafolio-cripto.postman_collection.json).
-3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 38 de
-   una sola vez.
+3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 43 de
+   una sola vez. Los requests del reporte necesitan el worker corriendo (`npm run worker` o el compose).
+   Los que cotizan dependen de CoinGecko, que en su plan gratuito limita las consultas (HTTP 429): si se
+   corre la colección muchas veces seguidas, el reporte puede quedar `fallido` y el test lo informa.
 
 La colección trae dos variables: `baseUrl` (`http://localhost:3000`) e `idActivo`, que se
 completa sola — el request *03 - Crear activo BTC* guarda el id devuelto y los siguientes
@@ -669,6 +765,13 @@ curl http://localhost:3000/api/ruta-inexistente                           # 404
 | Solo la lectura pública por id usa la caché | Actualizar y eliminar deciden con el dato real de MySQL; no pueden apoyarse en una copia que puede estar desactualizada. |
 | Redis con `noeviction` y AOF | Con la memoria llena rechaza escrituras en vez de borrar claves sin avisar (lo exige la cola de la Parte 5), y los datos sobreviven a un reinicio. |
 | La contraseña de Redis no queda en `docker inspect` | Se pasa por variable de entorno y la expande el shell del contenedor, en vez de interpolarse en el comando. |
+| BullMQ en lugar de Bull | Bull está en modo mantenimiento y sus autores recomiendan BullMQ; los conceptos de la letra (cola, worker, `completed`/`failed`) son los mismos. |
+| BullMQ con `ioredis` y no con el cliente oficial | El adaptador de `redis` (BullMQ 6) tumbaba el proceso ante una caída de Redis y no se recuperaba limpio; con `ioredis` sí. |
+| El worker es un proceso aparte (misma imagen, otro comando) | Se detiene o reinicia sin tocar la API, y con la API en cluster (Parte 8) no se multiplican workers sin querer. |
+| La cola falla en el acto con Redis caído | `enableOfflineQueue: false`: `add` falla en 1 ms y la API responde 503 en vez de colgarse. |
+| El id del reporte es un UUID y un id que no lo es da 404 sin consultar Redis | Evita que `GET /api/reportes/meta` lea la configuración interna de la cola. |
+| Un fallo al auditar un reporte hace fallar el trabajo | Un reporte se puede regenerar y la cola reintenta; a diferencia del CRUD, no hay una operación irreversible detrás. |
+| Redis con `noeviction` | BullMQ no puede perder trabajos por desalojo: con la memoria llena Redis rechaza escrituras. |
 | Migraciones al arrancar la API | Cómodo con una sola instancia. Con varias arrancando a la vez convendría un paso de migración aparte. |
 | 409 por símbolo duplicado | El portafolio tiene una única posición por activo. |
 | 404 vs 502 en precios | 404 si el símbolo no está soportado (no se llega a llamar a CoinGecko); 502 solo si CoinGecko falla de verdad, porque el error es de un servicio upstream y no nuestro. |
@@ -690,6 +793,8 @@ sin compilar en desarrollo y compilado en producción:
 
 ### Fuera de alcance (posibles mejoras)
 
+- Autenticación para `POST /api/activos/reporte`: es la operación más cara de la API y hoy cualquiera puede pedirla (Parte 6).
+- Deduplicar pedidos de reporte repetidos y respetar el `Retry-After` de CoinGecko al reintentar.
 - Invalidación robusta de la caché de activos: hoy depende del TTL si Redis está caído durante un `PUT` o un `DELETE`.
 - Caché de ~60 s para las cotizaciones (en Redis, ahora que está disponible), y así no golpear el *rate limit*
   gratuito de CoinGecko.
