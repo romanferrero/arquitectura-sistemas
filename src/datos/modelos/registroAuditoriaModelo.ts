@@ -1,12 +1,12 @@
 import mongoose, { Schema } from "mongoose";
 import type { Model } from "mongoose";
-import { OPERACIONES_AUDITORIA } from "../../modelos/auditoria.ts";
-import type { OperacionAuditoria } from "../../modelos/auditoria.ts";
+import { ENTIDADES_AUDITORIA, OPERACIONES_AUDITORIA } from "../../modelos/auditoria.ts";
+import type { EntidadAuditoria, OperacionAuditoria } from "../../modelos/auditoria.ts";
 
 /** El documento tal como se guarda en MongoDB. */
 export type DocumentoAuditoria = {
   operacion: OperacionAuditoria;
-  entidad: "Activo";
+  entidad: EntidadAuditoria;
   entidadId: string;
   antes?: Record<string, unknown>;
   despues?: Record<string, unknown>;
@@ -27,7 +27,7 @@ export type DocumentoAuditoria = {
 const esquema = new Schema<DocumentoAuditoria>(
   {
     operacion: { type: String, enum: OPERACIONES_AUDITORIA, required: true },
-    entidad: { type: String, enum: ["Activo"], required: true },
+    entidad: { type: String, enum: ENTIDADES_AUDITORIA, required: true },
     entidadId: { type: String, required: true },
     antes: { type: Schema.Types.Mixed, required: false },
     despues: { type: Schema.Types.Mixed, required: false },
