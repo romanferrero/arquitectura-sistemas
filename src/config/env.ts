@@ -63,10 +63,25 @@ export function mongoUri(): string {
  * trae caracteres reservados.
  */
 export function redisUrl(): string {
-  const password = encodeURIComponent(textoRequerido("REDIS_PASSWORD"));
-  const host = textoRequerido("REDIS_HOST");
-  const puerto = numeroRequerido("REDIS_PORT");
-  return `redis://:${password}@${host}:${puerto}`;
+  const { host, puerto, password } = redisConfig();
+  return `redis://:${encodeURIComponent(password)}@${host}:${puerto}`;
+}
+
+/**
+ * Host, puerto y password de Redis por separado. Los usa BullMQ, que abre sus propias
+ * conexiones (con `ioredis`) a partir de estos datos y no de una URL.
+ */
+export function redisConfig(): { host: string; puerto: number; password: string } {
+  return {
+    host: textoRequerido("REDIS_HOST"),
+    puerto: numeroRequerido("REDIS_PORT"),
+    password: textoRequerido("REDIS_PASSWORD"),
+  };
+}
+
+/** Cuanto demora (simulado) el worker en generar un reporte, en milisegundos. Admite 0. */
+export function reporteDemoraMs(): number {
+  return numeroNoNegativoRequerido("REPORTE_DEMORA_MS");
 }
 
 /** Cuanto dura un activo en la cache de Redis antes de volver a leerlo de MySQL. */
