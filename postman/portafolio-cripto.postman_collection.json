@@ -4,14 +4,229 @@
     "description": "Colección de pruebas de la API de portafolio de criptoactivos.\n\nSe puede ejecutar completa y en orden con el Collection Runner: el request 3 guarda el id del activo creado en la variable {{idActivo}} y los siguientes lo reutilizan.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{tokenTrader}}", "type": "string"}]},
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:3000" },
     { "key": "idActivo", "value": "" },
     { "key": "idCache", "value": "" },
     { "key": "idReporte", "value": "" },
-    { "key": "intentosSeguimiento", "value": "0" }
+    { "key": "intentosSeguimiento", "value": "0" },
+    { "key": "urlIdp", "value": "https://TU-TENANT.us.auth0.com" },
+    { "key": "audience", "value": "https://portafolio-cripto/api" },
+    { "key": "clientId", "value": "CAMBIAR-por-el-client-id-de-la-aplicacion" },
+    { "key": "emailAuditor", "value": "auditor@CAMBIAR.com" },
+    { "key": "emailTrader", "value": "trader@CAMBIAR.com" },
+    { "key": "emailAdmin", "value": "admin@CAMBIAR.com" },
+    { "key": "passwordPrueba", "value": "CAMBIAR" },
+    { "key": "tokenAuditor", "value": "" },
+    { "key": "tokenTrader", "value": "" },
+    { "key": "tokenAdmin", "value": "" }
   ],
   "item": [
+    {
+      "name": "T1 - Pedir el token del AUDITOR al proveedor de identidad",
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "grant_type",
+              "value": "password"
+            },
+            {
+              "key": "username",
+              "value": "{{emailAuditor}}"
+            },
+            {
+              "key": "password",
+              "value": "{{passwordPrueba}}"
+            },
+            {
+              "key": "audience",
+              "value": "{{audience}}"
+            },
+            {
+              "key": "client_id",
+              "value": "{{clientId}}"
+            },
+            {
+              "key": "scope",
+              "value": "openid"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{urlIdp}}/oauth/token",
+          "host": [
+            "{{urlIdp}}"
+          ],
+          "path": [
+            "oauth",
+            "token"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('el proveedor de identidad entrega un token (200)', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test('es un JWT (3 partes)', () => pm.expect(r.access_token.split('.')).to.have.lengthOf(3));",
+              "pm.collectionVariables.set('tokenAuditor', r.access_token);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "T2 - Pedir el token del TRADER al proveedor de identidad",
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "grant_type",
+              "value": "password"
+            },
+            {
+              "key": "username",
+              "value": "{{emailTrader}}"
+            },
+            {
+              "key": "password",
+              "value": "{{passwordPrueba}}"
+            },
+            {
+              "key": "audience",
+              "value": "{{audience}}"
+            },
+            {
+              "key": "client_id",
+              "value": "{{clientId}}"
+            },
+            {
+              "key": "scope",
+              "value": "openid"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{urlIdp}}/oauth/token",
+          "host": [
+            "{{urlIdp}}"
+          ],
+          "path": [
+            "oauth",
+            "token"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('el proveedor de identidad entrega un token (200)', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test('es un JWT (3 partes)', () => pm.expect(r.access_token.split('.')).to.have.lengthOf(3));",
+              "pm.collectionVariables.set('tokenTrader', r.access_token);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "T3 - Pedir el token del ADMIN al proveedor de identidad",
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "grant_type",
+              "value": "password"
+            },
+            {
+              "key": "username",
+              "value": "{{emailAdmin}}"
+            },
+            {
+              "key": "password",
+              "value": "{{passwordPrueba}}"
+            },
+            {
+              "key": "audience",
+              "value": "{{audience}}"
+            },
+            {
+              "key": "client_id",
+              "value": "{{clientId}}"
+            },
+            {
+              "key": "scope",
+              "value": "openid"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{urlIdp}}/oauth/token",
+          "host": [
+            "{{urlIdp}}"
+          ],
+          "path": [
+            "oauth",
+            "token"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('el proveedor de identidad entrega un token (200)', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test('es un JWT (3 partes)', () => pm.expect(r.access_token.split('.')).to.have.lengthOf(3));",
+              "pm.collectionVariables.set('tokenAdmin', r.access_token);"
+            ]
+          }
+        }
+      ]
+    },
     {
       "name": "00 - Limpiar el portafolio",
       "request": {
@@ -37,7 +252,9 @@
               "// la coleccion se pueda ejecutar las veces que haga falta.",
               "pm.test('200 OK', () => pm.response.to.have.status(200));",
               "const base = pm.collectionVariables.get('baseUrl');",
-              "pm.response.json().forEach(a => pm.sendRequest({ url: base + '/api/activos/' + a.id, method: 'DELETE' }));"
+              "// pm.sendRequest NO hereda la autenticacion de la coleccion: el token se manda a mano.",
+              "const autorizacion = 'Bearer ' + pm.collectionVariables.get('tokenTrader');",
+              "pm.response.json().forEach(a => pm.sendRequest({ url: base + '/api/activos/' + a.id, method: 'DELETE', header: { Authorization: autorizacion } }));"
             ]
           }
         }
@@ -1308,6 +1525,149 @@
             "type": "text/javascript",
             "exec": [
               "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "43 - Autenticacion: quien soy (GET /api/yo)",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/yo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "yo"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test('trae el sub del usuario', () => pm.expect(r.sub).to.be.a('string').and.not.empty);",
+              "pm.test('el usuario del token tiene el rol TRADER', () => pm.expect(r.roles).to.include('TRADER'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "44 - Error 401: sin token",
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+              "pm.test('dice con que esquema autenticarse', () => pm.expect(pm.response.headers.get('WWW-Authenticate')).to.include('Bearer'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "45 - Error 401: token invalido",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "esto.no.es-un-token",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+              "pm.test('no detalla por que fallo el token', () => pm.expect(pm.response.json().error.mensaje).to.eql('Token inválido'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "46 - Error 401: un token manipulado (cuerpo cambiado a ADMIN)",
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/yo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "yo"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const partes = pm.collectionVariables.get('tokenTrader').split('.');",
+              "const cuerpo = JSON.parse(atob(partes[1].replace(/-/g, '+').replace(/_/g, '/')));",
+              "cuerpo['https://portafolio-cripto/roles'] = ['ADMIN'];",
+              "const nuevo = btoa(JSON.stringify(cuerpo)).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');",
+              "pm.request.headers.upsert({ key: 'Authorization', value: 'Bearer ' + partes[0] + '.' + nuevo + '.' + partes[2] });"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('401 Unauthorized: la firma ya no coincide', () => pm.response.to.have.status(401));",
+              "pm.test('Token invalido', () => pm.expect(pm.response.json().error.mensaje).to.eql('Token inválido'));"
             ]
           }
         }
