@@ -1,28 +1,34 @@
-# El proyecto completo: la API (Node.js), MySQL (activos) y MongoDB (auditoria).
+# El proyecto completo: la API (Node.js), MySQL (activos), MongoDB (auditoria) y Redis (cache y colas).
 #
 # Todo junto:        docker compose up -d --build --wait
-# Solo las bases:    docker compose up -d --wait mysql mongodb   (y la API con npm run dev)
+# Solo las bases:    docker compose up -d --wait mysql mongodb redis   (y la API con npm run dev)
 # Estado:            docker compose ps
 # Logs de la API:    docker compose logs -f api
 # Bajar:             docker compose down       (conserva los datos)
-# Desde cero:        docker compose down -v    (BORRA los datos de ambas bases)
+# Desde cero:        docker compose down -v    (BORRA los datos de las tres bases)
 #
 # Toma las credenciales y los puertos del .env (ver .env.example). Los puertos de
 # las bases se publican solo en 127.0.0.1: no quedan expuestos al resto de la red.
 name: portafolio-cripto
 
+# Lo que cambia DENTRO de la red de Docker: alli las bases no estan en localhost sino bajo el
+# nombre de su servicio, y se llega por el puerto interno del contenedor (no por el que se
+# publica al host). Lo comparten la API y el worker.
+x-entorno-en-docker: &entorno_en_docker
+  MYSQL_HOST: mysql
+  MYSQL_PORT: "3306"
+  MONGO_HOST: mongodb
+  MONGO_PORT: "27017"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+
 services:
   api:
     build: .
-    # Carga el .env completo y despues pisa lo que cambia DENTRO de la red de Docker:
-    # alli las bases no estan en localhost sino bajo el nombre de su servicio, y se
-    # llega por el puerto interno del contenedor (no por el que se publica al host).
+    image: portafolio-cripto-api
+    # Carga el .env completo y despues pisa lo que cambia dentro de la red de Docker.
     env_file: .env
-    environment:
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MONGO_HOST: mongodb
-      MONGO_PORT: "27017"
+    environment: *entorno_en_docker
     ports:
       - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
     depends_on:
@@ -30,12 +36,36 @@ services:
         condition: service_healthy
       mongodb:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:' + process.env.PORT + '/salud').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 20s
+    restart: unless-stopped
+
+  # Worker de la cola de reportes: MISMA imagen que la API, otro comando. Es un proceso aparte:
+  # se puede detener, reiniciar o escalar sin tocar la API. No publica puertos. Espera a que la
+  # API este sana porque ella aplica las migraciones (la tabla `activos` tiene que existir).
+  worker-reportes:
+    build: .
+    image: portafolio-cripto-api
+    command: ["node", "dist/procesos/workerReportes.js"]
+    env_file: .env
+    environment: *entorno_en_docker
+    depends_on:
+      api:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # `docker compose stop` manda SIGTERM: el worker termina el reporte en curso antes de salir.
+    stop_grace_period: 40s
     restart: unless-stopped
 
   mysql:
@@ -84,6 +114,32 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    # La password llega por variable de entorno y la expande el shell del contenedor ($$):
+    # asi no queda escrita en el comando que muestra `docker inspect`.
+    # AOF: los datos sobreviven a un reinicio. noeviction: con la memoria llena Redis rechaza
+    # escrituras en vez de borrar claves en silencio, que es lo que BullMQ necesita para no
+    # perder trabajos (la cache se acota con TTL, no con desalojo).
+    command:
+      - sh
+      - -c
+      - 'exec redis-server --appendonly yes --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"'
+    volumes:
+      - redis_data:/data
+    # redis-cli devuelve 0 aunque la respuesta sea un error (NOAUTH), por eso se busca PONG.
+    healthcheck:
+      test: ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
 volumes:
   mysql_data:
   mongodb_data:
+  redis_data:

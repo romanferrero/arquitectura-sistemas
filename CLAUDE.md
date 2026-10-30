@@ -1,11 +1,11 @@
 # portafolio-cripto
 
 API REST de un portafolio de criptoactivos (Node 24 · Express 5 · TypeScript 7), ejercicio
-del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.md](PLAN.md).
+del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.md](PLAN.md) (Partes 5 a 8; el plan de las Partes 3 y 4 está archivado en `PLAN-PARTES-3-4.md`).
 
 ## Cómo se trabaja
 
-- Las letras del curso y los ejemplos del profesor están en `Contextos/`.
+- Las letras del curso y los ejemplos del profesor están en `Contextos/` (PDF de las Partes 3 a 8, `crypto-databases-ejemplo/`, `Ejemplo-pub-sub/` y `pm2-lab/`).
 - Al empezar una sesión: leer `PLAN.md` (sección Estado) y la última entrada de `BITACORA.md`.
 - Al cerrar una sesión: marcar el avance en `PLAN.md` y agregar una entrada en
   `BITACORA.md` (modelo, esfuerzo, modo, skills, decisiones y quién las tomó, verificación).
@@ -35,10 +35,11 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
 | `npm run check` | Tipos de `src/` y `pruebas/`, sin emitir |
 | `npm test` | Jest en modo ESM |
 | `npm run build` | Compila a `dist/` |
-| `docker compose up -d --build --wait` | Levanta la API, MySQL y MongoDB (Docker Desktop tiene que estar prendido) |
-| `docker compose up -d --wait mysql mongodb` | Solo las bases (la API con `npm run dev`) |
+| `docker compose up -d --build --wait` | Levanta la API, MySQL, MongoDB y Redis (Docker Desktop tiene que estar prendido) |
+| `docker compose up -d --wait mysql mongodb redis` | Solo las bases (la API con `npm run dev`) |
+| `npm run worker` | Worker de la cola de reportes (BullMQ); en Docker es el servicio `worker-reportes` |
 | `npm run migrar` / `migrar:deshacer` / `migrar:estado` | Migraciones de MySQL |
-| `npm run db:verificar` | Comprueba que la app llegue a las dos bases |
+| `npm run db:verificar` | Comprueba que la app llegue a las tres bases |
 
 ## Convenciones
 
@@ -58,4 +59,12 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
   Una migración ya aplicada no se edita: se agrega una nueva.
 - En esta máquina hay un MongoDB instalado en Windows que ocupa el puerto 27017: el `.env`
   local usa `MONGO_PORT=27018` para el contenedor. `.env.example` conserva 27017.
+- Redis (`src/datos/redis.ts`): la caché es de mejor esfuerzo (si falla se sirve desde MySQL, solo se loguea);
+  las preferencias no (503). Los servicios reciben los comandos por parámetro (`ComandosRedis`) y los tests usan
+  `pruebas/ayudas/redisFalso.ts`. Las variables `REDIS_*` se leen con las funciones `redisUrl()` (cliente `redis`) y `redisConfig()` (BullMQ), no con `env`
+  (así `migrar` no las exige).
+- Cola de reportes (BullMQ, Parte 5): la API es el **productor** (`src/colas/`, `servicios/crearServicioReportes.ts`) y el
+  **worker** es otro proceso (`src/procesos/workerReportes.ts`, misma imagen, otro comando). BullMQ usa `ioredis` (el adaptador
+  del cliente `redis` no resistió una caída de Redis); la lógica del reporte vive en `src/reportes/` con todo por parámetro.
+  Un fallo al auditar un reporte hace fallar el trabajo (a diferencia del CRUD).
 - Tests en `pruebas/`, importando `describe`/`test`/`expect` desde `@jest/globals`.

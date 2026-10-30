@@ -8,7 +8,14 @@
 export function describirError(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
 
-  const codigo = (error as { parent?: { code?: unknown } }).parent?.code;
+  // El codigo puede venir en `parent` (Sequelize), en el propio error o en el primero de
+  // los errores agrupados (el AggregateError de Node/redis cuando no se llega al servidor).
+  const conCodigo = error as {
+    parent?: { code?: unknown };
+    code?: unknown;
+    errors?: { code?: unknown }[];
+  };
+  const codigo = conCodigo.parent?.code ?? conCodigo.code ?? conCodigo.errors?.[0]?.code;
   const partes = [error.name, error.message, typeof codigo === "string" ? codigo : ""];
   return partes.filter((parte) => parte !== "").join(": ");
 }

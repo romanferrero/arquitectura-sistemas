@@ -1,251 +1,337 @@
-# Plan — Parte 3 (Pipes & Filters) y Parte 4 (Persistencia) · portafolio-cripto
+# Plan — Partes 5 a 8 (Redis/BullMQ, Seguridad, CQRS/Pub-Sub, PM2) · portafolio-cripto
+
+El plan de las Partes 3 y 4 (ya en `main`) está archivado en [PLAN-PARTES-3-4.md](PLAN-PARTES-3-4.md).
 
 ## Estado
 
-- [x] Sesión 0 — Planificación
-- [x] Sesión 1 — Base del pipeline, logger y tests
-- [x] Sesión 2 — Pipeline de ingesta
-- [x] Sesión 3 — Pipeline de análisis y cierre de la Parte 3 (**Parte 3 en `main`**)
-- [x] Sesión 4 — Infraestructura de datos y migraciones
-- [x] Sesión 5 — Repositorio de activos sobre MySQL
-- [x] Sesión 6 — Auditoría en MongoDB
-- [x] Sesión 7 — API en Compose y cierre de la Parte 4 (revisiones hechas; falta el merge a `main`)
-
-El detalle de lo hecho en cada sesión está en [BITACORA.md](BITACORA.md).
+- [x] Sesiones 0 a 7 — Partes 3 y 4 (en `main`, commit `3297718`)
+- [x] Sesión 8 — Planificación de las Partes 5 a 8
+- [x] Sesión 9 — Redis: infraestructura, caché, preferencias y ranking
+- [x] Sesión 10 — BullMQ: cola de reportes, worker (falta el cierre de la **Parte 5**: revisión y merge a `main`)
+- [ ] Sesión 11 — Auth0 y middleware JWT (JWKS)
+- [ ] Sesión 12 — RBAC, modo pánico y cierre de la **Parte 6**
+- [ ] Sesión 13 — CQRS: comandos, consultas y publicación de eventos
+- [ ] Sesión 14 — Pub/Sub: suscriptores y cierre de la **Parte 7**
+- [ ] Sesión 15 — PM2 cluster, salud, cierre ordenado y monitor de reinicios
+- [ ] Sesión 16 — Pruebas de carga y cierre de la **Parte 8**
 
 ## Contexto
 
-El proyecto está en el estado de la Parte 1/2: API REST en capas
-(`rutas → controladores → servicios → datos`) con un array en memoria, validación a mano
-y CoinGecko para cotizaciones. En `Contextos/` hay dos letras nuevas y un ejemplo:
+Las Partes 3 y 4 están en `main`: pipelines (Zod, Winston, Jest), MySQL + Sequelize + Umzug para
+`activos`, MongoDB + Mongoose para la auditoría, todo en Docker Compose. 158 tests, Newman 29
+requests en verde.
 
-- **Parte 3** — Pipes & Filters: pipeline de ingesta (Zod, normalización, conversión de
-  moneda), `POST /assets/analyze` con pipeline de análisis, logging con Winston/Pino y
-  tests con Jest. **No está implementada.**
-- **Parte 4** — Persistencia: MySQL + Sequelize + migraciones para `Asset`, MongoDB +
-  Mongoose para `AuditLog`, repositorios adaptados, `docker-compose.yml` con API + ambas
-  bases y variables de entorno nativas.
-- **Ejemplo** (`Contextos/crypto-databases-ejemplo/`): `compose.yaml` con MySQL 8.4 y
-  Mongo 8.0 con healthchecks, y un laboratorio con modelo Sequelize, schema Mongoose y
-  un demo combinado. Se toma como referencia directa para la Parte 4.
+Letras nuevas en `Contextos/` (cuatro PDF) y dos ejemplos:
 
-Decidido con vos en la sesión de plan:
+- **Parte 5** — Redis (cliente oficial): caché con `set/get` + TTL, preferencias con
+  `hSet/hGetAll`, cola `report-queue` con Bull, `POST /assets/report` → 202, worker que registra
+  en la auditoría, eventos `completed/failed` en Winston, `on('error')` + `connect()`, Redis en
+  compose. Bonus: comando atómico (`INCR`).
+- **Parte 6** — JWT con IdP (opción B, recomendada) validando contra JWKS, 401 si es inválido,
+  RBAC AUDITOR/TRADER/ADMIN desde el payload. Bonus: Panic Mode en Redis (403 a escrituras).
+- **Parte 7** (el PDF dice "Parte 6" en el título, es un error de la letra) — CQRS: comandos
+  solo validan y persisten en MySQL; consultas leen de Redis y caen a MySQL. Pub/Sub: publicar
+  en `asset-updates`; suscriptor que actualiza caché, invalida rankings/contadores y audita en
+  Mongo. Bonus: segundo suscriptor de Whale Alert + reto (suscriptor caído vs Bull). README: por
+  qué CQRS mejora el rendimiento.
+- **Parte 8** — PM2 `ecosystem.config.js` (`instances: "max"`, `autorestart`,
+  `max_memory_restart`), `GET /health` con MySQL/Mongo/Redis, cierre ordenado con SIGINT
+  (incluido Bull), `pm2 monit`, log crítico si una instancia reinicia > 5 veces/min, prueba de
+  carga con 100 usuarios (lectura y escritura), comparación una instancia vs cluster.
+- **Ejemplos**: `Ejemplo-pub-sub/` (API + 2 suscriptores en contenedores separados, misma
+  imagen, dos conexiones por suscriptor, Redis 7.4 con contraseña y AOF) y `pm2-lab/`
+  (`ecosystem.config.cjs`, `pm2-runtime` en Docker, `wait_ready`, cierre ordenado, k6 en un
+  servicio de compose con perfil). Se toman como molde directo.
 
-| Tema | Decisión |
+### Decisiones tomadas en esta sesión
+
+| Tema | Decisión | Quién |
+|---|---|---|
+| Identidad (Parte 6) | **Auth0** (opción B). La API valida con JWKS; los roles van en un claim propio que agrega una Action | Estudiante |
+| Cola (Parte 5) | **BullMQ** en lugar de Bull: Bull está en modo mantenimiento (última versión dic-2024) y sus autores recomiendan BullMQ | Estudiante, a propuesta de Claude |
+| Nombres | En español, con tabla "letra → proyecto" en el README (mismo criterio que en la Parte 3) | Estudiante |
+| Orden | Una parte por vez; cada parte se cierra en `main` antes de empezar la siguiente | Estudiante |
+| Procesos | Worker y suscriptores son **procesos aparte** (misma imagen, otro comando), como en los ejemplos. Es lo que permite el cluster de la Parte 8 sin duplicar trabajo | Claude |
+| Bonus | Se hacen todos (INCR, Panic Mode, Whale Alert + reto) | Claude, a confirmar |
+| Sesión de plan | Opus 5.5 · esfuerzo extra alto · modo plan | Estudiante |
+
+### Tabla de nombres (va al README)
+
+| En la letra | En el proyecto |
 |---|---|
-| Orden | Parte 3 primero, después Parte 4 |
-| Migraciones | Umzug (programático, `.ts`, sin `.cjs`) |
-| Entidad `User` (opcional) | Queda fuera; se documenta como mejora futura |
-| Sesión de plan | Opus 5.5 · esfuerzo alto · modo plan |
+| cola `report-queue` | `cola-reportes` |
+| `POST /assets/report` | `POST /api/activos/reporte` (+ `GET /api/reportes/:id`) |
+| canal `asset-updates` | `activos-actualizaciones` |
+| `SET panic_mode true` | `SET modo_panico true` |
+| `GET /assets/:id/history` | `GET /api/activos/:id/historial` (ya existe) |
+| `GET /health` | `GET /salud` (ya existe; se amplía) |
+| `createAsset / updateAsset / deleteAsset` | `crearActivo / actualizarActivo / eliminarActivo` |
+| `ecosystem.config.js` | `ecosystem.config.cjs` si PM2 no carga ESM (el proyecto es `"type": "module"`) |
 
-Supuesto a documentar: la Parte 4 habla de un `AuditRepository` "existente", pero ninguna
-letra anterior lo define → se crea nuevo en la Parte 4, directo sobre Mongoose.
+### Claves de Redis
+
+| Clave | Tipo | Para qué | Desde |
+|---|---|---|---|
+| `activo:<id>` | String JSON + TTL | Caché / modelo de lectura | S9 |
+| `activos:todos` | String JSON + TTL | Lista para la consulta | S13 |
+| `activos:mas-consultados` | Sorted Set (`ZINCRBY`) | Ranking | S9 |
+| `preferencias:billetera` → `preferencias:<sub>` | Hash | Preferencias | S9 → S12 |
+| `estadisticas:reportes-exitosos` | `INCR` | Bonus Parte 5 | S10 |
+| `estadisticas:eventos-activos` | Hash (`HINCRBY`) | Contadores por tipo de evento | S14 |
+| `modo_panico` | String | Bonus Parte 6 | S12 |
+| `bull:cola-reportes:*` | (BullMQ) | Jobs | S10 |
 
 ## Convenciones que se mantienen
 
-- Nombres en español (carpetas, funciones, JSON, tablas y colecciones).
-- Imports con extensión `.ts`, `import type`, sin `enum` ni parameter properties
-  (`erasableSyntaxOnly`): el mismo código corre con `node src/servidor.ts` y compilado.
-- `config/env.ts` sigue siendo el único archivo que lee `process.env` (fail fast).
-- Cualquier capa lanza `ErrorApi`; `middlewares/manejadorErrores.ts` es el único que
-  traduce a HTTP. Los controladores siguen sin try/catch.
-- El contrato actual de la API no se rompe: la colección de Postman existente debe
-  seguir pasando al final de cada sesión.
-- Git: GitFlow. Una rama `feature/sesion-N-*` por sesión, merge `--no-ff` a `develop` y
-  push de `develop` al cerrar la sesión. `main` (producción) solo se actualiza al cerrar
-  la Parte 3 y la Parte 4, con todo verificado y sin tags. Detalle en `CLAUDE.md`.
+Las de `CLAUDE.md`: español, imports `.ts`, `import type`, sin `enum`; capas
+`rutas → controladores → servicios → datos`; `config/env.ts` único lector de `process.env`
+(Redis con una función `redisUrl()` como `mongoUri()`, para que `migrar` no la exija);
+`ErrorApi` + `manejadorErrores`; dependencias por parámetro para testear sin red ni Redis
+(fakes en memoria); el contrato existente no se rompe salvo lo que exige la Parte 6 (token).
+GitFlow: `feature/sesion-N-<tema>` → `develop` (`--no-ff`, push) → `main` al cerrar cada parte
+con OK del estudiante. **Commits sin `Co-Authored-By`.**
 
 ## Sesiones
 
-Cada sesión deja la app funcionando, verificada, y cierra con una entrada en
-`BITACORA.md`. Al empezar cada sesión me decís modelo y esfuerzo (el esfuerzo no lo veo).
+Cada sesión deja la app funcionando, con `check`, tests y Newman en verde, y cierra con su
+entrada en `BITACORA.md`. Al empezar me decís modelo y esfuerzo.
 
-### Sesión 1 — Base del pipeline, logger y tests
-Preparación (una sola vez):
-- `PLAN.md` en la raíz (copia de este plan con checklist por sesión) y `BITACORA.md`
-  con la entrada de la sesión 0 (ver más abajo).
-- `CLAUDE.md` con convenciones y comandos, para que cada sesión arranque con contexto.
-- Memoria: preferencia de bitácora + mensaje al profesor; `Contextos/` como fuente de letras.
-- Proponer `git init` + un commit por sesión (lo confirmás vos).
+### Sesión 9 — Redis: infraestructura, caché, preferencias y ranking
+- Preparación: `PLAN.md` nuevo (este), archivar el anterior, entrada de la sesión 8 en la
+  bitácora, `CLAUDE.md` con comandos nuevos. Prender Docker Desktop (estaba apagado).
+- Compose: servicio `redis` (`redis:7.4-alpine` como el ejemplo), AOF, contraseña desde `.env`
+  sin dejarla literal en `docker inspect`, healthcheck autenticado, `127.0.0.1`, volumen,
+  `maxmemory-policy noeviction` (BullMQ lo exige: no puede perder jobs por desalojo).
+- `.env`/`.env.example`: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `CACHE_TTL_SEGUNDOS`.
+- `src/datos/redis.ts`: cliente `redis` (oficial) con nombre, `on('error')`, `on('reconnecting')`,
+  `disableOfflineQueue` (si Redis cae, los comandos fallan enseguida en vez de quedar colgados).
+  `servidor.ts` hace `connect()` al arrancar (fail fast, como las otras bases) y `cerrarConexiones`
+  suma el `quit()`. `db:verificar` hace `PING`.
+- `src/servicios/cacheActivos.ts` (fábrica con el cliente inyectado): `GET /api/activos/:id` con
+  cache-aside (`get` → si falla, MySQL → `set` con `EX`). PUT/DELETE invalidan después de que
+  MySQL confirma. **Mejor esfuerzo**: Redis caído → se loguea y se sirve desde MySQL. Header
+  `X-Cache: HIT|MISS` para verlo en Postman y en k6.
+- Ranking: `ZINCRBY activos:mas-consultados` en cada consulta por id.
+- `GET` / `PUT /api/preferencias` (Hash, Zod: `monedaVisualizacion`, `limiteAlertaUsd`).
+  Son la fuente de verdad: con Redis caído → 503.
+- Tests con un Redis falso: hit, miss, Redis caído, invalidación, preferencias.
 
-Código:
-- `src/pipeline/pipeline.ts` — tipo `Filtro<Entrada, Salida>` (`nombre` + `ejecutar`) y
-  clase `Pipeline` con `.agregar()` encadenable y tipado. El runner ejecuta en orden,
-  loguea cada filtro que termina bien y cuál falló, y corta en el primer error (fail fast).
-- `src/config/logger.ts` — **Winston**: formato `[INFO] FiltroX: mensaje` en desarrollo,
-  JSON en producción, silencioso en tests. Reemplaza los `console.*` de
-  `servidor.ts` y `manejadorErrores.ts`.
-- **Jest** en modo ESM (`node --experimental-vm-modules`), tests en `pruebas/` importando
-  de `@jest/globals`. Transformador propio de ~10 líneas con
-  `module.stripTypeScriptTypes` (lo mismo que hace Node al ejecutar). Si da problemas:
-  `@swc/jest`. No se usa `ts-jest` porque depende de la API vieja del compilador y el
-  proyecto está en TypeScript 7.
-- `tsconfig.check.json` para que `npm run check` también tipe `pruebas/`.
-- Tests del runner: orden de ejecución, corte en el primer error, log del filtro que falló.
+### Sesión 10 — BullMQ: cola de reportes, worker y cierre de la Parte 5
+- `bullmq` + `ioredis` (en BullMQ 6 `ioredis` es una dependencia opcional, no viene incluida; se probó el adaptador del
+  cliente oficial y no resistió una caída de Redis). Conviven dos clientes: el oficial para lo que pide la letra y
+  `ioredis` dentro de BullMQ.
+- `src/colas/colaReportes.ts`: `cola-reportes`, 3 intentos con backoff, limpieza de jobs viejos.
+- `POST /api/activos/reporte` → 202 + `Location` + `{ idReporte, estado: "en_cola" }`;
+  `GET /api/reportes/:id` → estado (`en_cola | procesando | completado | fallido`), progreso,
+  resultado o motivo. Redis caído → 503.
+- `src/reportes/generarReporte.ts` (dependencias inyectadas): "Reporte de Valoración Masiva":
+  todos los activos, precios de CoinGecko en **una** llamada (nueva `obtenerPrecios(simbolos)`
+  que reutiliza `extraerPrecio` de `preciosServicio.ts`), totales y P/L, demora simulada
+  (`REPORTE_DEMORA_MS`) con progreso. Un símbolo sin precio va a `sinPrecio`; si falla todo,
+  el job falla y BullMQ reintenta.
+- `src/procesos/workerReportes.ts`: proceso aparte; conecta MySQL, Mongo y Redis; registra el
+  resultado en la auditoría (`GENERAR_REPORTE`, entidad `Reporte`: se amplían el enum del schema
+  y los tipos de `modelos/auditoria.ts`). Acá el fallo de Mongo **sí** hace fallar el job: la
+  cola reintenta, a diferencia de la auditoría de mejor esfuerzo del CRUD.
+- `worker.on('completed')` / `on('failed')` → Winston; en `completed`, `INCR` del contador
+  (bonus). `GET /api/estadisticas`: reportes exitosos + top 5 más consultados.
+- Cierre ordenado del worker: `worker.close()` espera el job en curso.
+- Compose: servicio `worker-reportes` (misma imagen, `command` propio). Script `npm run worker`.
+- Tests: valoración, `sinPrecio`, todo falla → lanza, estados del job, estadísticas.
+- **Cierre de la parte:** Postman (preferencias, reporte con polling, estadísticas, caché),
+  README (Redis, caché, cola, tabla de nombres), `RESPUESTAS-PARTE-5.md`, `/code-review` (high),
+  merge a `main` con tu OK y mensaje al profesor.
 
-### Sesión 2 — Pipeline de ingesta
-- `src/pipeline/ingesta/`:
-  - `filtroValidacion.ts` — esquema **Zod**; solo valida, no transforma. Acumula todos
-    los errores en `detalles`. Reemplaza `validaciones/activoValidacion.ts`
-    (`validarSimbolo` se conserva para `GET /precios/:simbolo`).
-  - `filtroNormalizacion.ts` — símbolo en mayúsculas, espacios extra fuera.
-  - `filtroConversionMoneda.ts` — campo nuevo opcional `moneda` (default `USD`); si es
-    otra, consulta la tasa y convierte `precioCompra`.
-- `src/servicios/tasasServicio.ts` — adaptador de tipo de cambio con el mismo molde que
-  `preciosServicio.ts` (fetch nativo, `AbortSignal.timeout`, 502 si falla el tercero).
-  API gratuita sin key (candidata: `open.er-api.com`, soporta UYU; se confirma al
-  implementar). Variable nueva `API_TASAS_URL`.
-- Los filtros se crean con sus dependencias por parámetro (`crearFiltroConversionMoneda({
-  obtenerTasa })`) para testearlos sin red.
-- `servicios/activosServicio.ts`: `crearActivo` y `actualizarActivo` pasan por el
-  pipeline (mismo pipeline para POST y PUT) y quedan `async`.
-- Tests unitarios de cada filtro + pipeline completo de ingesta.
+### Sesión 11 — Auth0 y middleware JWT
+- Te guío en Auth0 (cuenta gratuita, ~15 min): API con identificador (audience), RS256; los
+  tres roles; Action post-login que agrega `https://portafolio-cripto/roles`; tres usuarios de
+  prueba (uno por rol); aplicación con grant *Password* para obtener tokens desde Postman y k6.
+- `jose`. Variables: `AUTH_ISSUER`, `AUTH_AUDIENCE`, `AUTH_JWKS_URL`, `AUTH_CLAIM_ROLES`. El
+  middleware no sabe que es Auth0: cambiar de IdP es cambiar configuración.
+- `src/seguridad/verificadorJwt.ts` (fábrica): `jwtVerify` con issuer, audience y `RS256`;
+  devuelve `{ sub, roles }` (roles desconocidos se descartan). En la app usa
+  `createRemoteJWKSet` (cachea las claves); en los tests, claves generadas en el momento con
+  `createLocalJWKSet` + `SignJWT` → **sin red**.
+- `src/middlewares/autenticacion.ts`: `Authorization: Bearer` → `res.locals.usuario`; sin token,
+  mal formado, vencido, firma, issuer o audience incorrectos → 401 con `WWW-Authenticate`.
+  Auth0 inalcanzable para bajar las JWKS → 503 (no es culpa del cliente).
+- Todo `/api` exige token; `/salud` queda pública. `GET /api/yo` devuelve `sub` y roles.
+- Postman: carpeta "00 - Tokens" que pide los tres tokens a Auth0; entorno local con secretos
+  en `.gitignore` y un `.ejemplo` versionado.
+- Tests del verificador (vencido, firma ajena, `alg: none`, audience/issuer errados, sin roles)
+  y del middleware.
 
-### Sesión 3 — Pipeline de análisis y cierre de la Parte 3
-- `src/pipeline/analisis/`: `filtroDepuracion.ts` (descarta montos ≤ 0),
-  `filtroAnalisisRiesgo.ts` (marca `high_risk` si `cantidad × precioCompra` supera
-  `UMBRAL_MONTO_USD` o si la `volatilidad` informada supera `UMBRAL_VOLATILIDAD`),
-  `filtroFormato.ts` (redondeo a 2 decimales + metadatos de auditoría: fecha, filtros
-  aplicados, id de análisis).
-- `POST /api/activos/analizar` — recibe un array, responde 200 con
-  `{ resumen: { recibidos, descartados, analizados, altoRiesgo }, activos }`.
-  Servicio nuevo `servicios/analisisServicio.ts`; ruta y controlador en los archivos existentes.
-- Tests de los tres filtros y del pipeline; requests nuevos en la colección de Postman.
-- Docs: README (endpoints, pipeline, logging, tests), `RESPUESTAS-PARTE-3.md`, bitácora.
-- `/code-review` sobre lo hecho en la Parte 3.
+### Sesión 12 — RBAC, modo pánico y cierre de la Parte 6
+- `src/seguridad/roles.ts` + `autorizar(...roles)` → 403. Permisos:
 
-### Sesión 4 — Infraestructura de datos y migraciones
-- `docker-compose.yml` con `mysql` y `mongodb` tomados del `compose.yaml` del ejemplo
-  (imágenes fijadas, healthchecks, volúmenes, puertos solo en 127.0.0.1).
-- `.env` / `.env.example`: `MYSQL_*` y `MONGO_*` como en el ejemplo, más `MYSQL_HOST` y
-  `MONGO_HOST`. Un solo `.env` sirve a Compose y a la app.
-- `config/env.ts`: valida las variables nuevas y arma la URI de Mongo
-  (`authSource=admin`), como `config.ts` del ejemplo.
-- Dependencias con las versiones del ejemplo: `sequelize` 6.37, `mysql2`, `mongoose` 9,
-  más `umzug`.
-- `src/datos/conexiones.ts` — crear/cerrar Sequelize y Mongoose (molde: `database.ts` del ejemplo).
-- `src/datos/modelos/activoModelo.ts` — `sequelize.define`, tabla `activos`, columnas
-  snake_case (`precio_compra`, `creado_en`, `actualizado_en`), `DECIMAL(24,8)` y
-  `DECIMAL(20,2)`, `simbolo` único. `timestamps: false`: las fechas las sigue poniendo el servicio.
-- `src/datos/migraciones/` — `001-crear-activos.ts` (`up`/`down`) + lista explícita de
-  migraciones (imports estáticos, sin glob: funciona igual en `src/` y en `dist/`).
-- `src/datos/migrar.ts` + scripts `npm run migrar` y `npm run migrar:deshacer`.
-- Sin `sync()`: el esquema solo cambia por migraciones.
+  | Endpoint | AUDITOR | TRADER | ADMIN |
+  |---|:-:|:-:|:-:|
+  | `GET` activos, precio, historial de un activo, `/precios/:simbolo` | ✓ | ✓ | ✓ |
+  | `GET /api/auditoria` | ✓ | – | ✓ |
+  | `POST/PUT/DELETE /api/activos`, `POST /api/activos/analizar` | – | ✓ | ✓ |
+  | `GET /api/preferencias` / `PUT` | ✓ / – | ✓ | ✓ |
+  | `POST /api/activos/reporte`, `GET /api/reportes/:id`, `GET /api/estadisticas` | – | – | ✓ |
+  | `DELETE /api/admin/cache`, `GET/PUT /api/admin/modo-panico` | – | – | ✓ |
 
-### Sesión 5 — Repositorio de activos sobre MySQL
-- `datos/activosRepositorio.ts` reescrito con el modelo Sequelize: mismas funciones,
-  ahora `async`. Mapea fila ↔ `Activo` (DECIMAL texto → `number`, `Date` → ISO) para que
-  el contrato JSON no cambie. `UniqueConstraintError` → `ErrorApi(409)`.
-- `activosServicio.ts` y `activosControlador.ts`: solo se agregan `await`/`async` en
-  listar, obtener y eliminar. El filtro `?simbolo=` baja a un `WHERE`.
-- `servidor.ts`: conectar MySQL → correr migraciones pendientes → conectar Mongo →
-  `listen`; cierre ordenado de conexiones en `SIGTERM`/`SIGINT`.
-- Verificar que los datos sobreviven a un reinicio de la API.
-- **Redondeo de MySQL (hallado en la sesión 4):** `DECIMAL(20,2)` y `DECIMAL(24,8)` redondean
-  en silencio (`98.456` se guarda como `98.46`). El repositorio tiene que devolver lo que
-  quedó realmente guardado (releer la fila tras escribir) para que el POST y el GET siguiente
-  digan lo mismo.
+- Limpiar caché: `SCAN` + `DEL` solo de `activo:*` y `activos:*`. **Nunca `FLUSHALL`**: borraría
+  jobs, preferencias y contadores.
+- Modo pánico: middleware en las rutas de escritura (CRUD y `PUT /preferencias`); si
+  `modo_panico` está activo y el usuario no es ADMIN → 403. Si no se puede leer Redis → 503
+  (falla cerrado: ante la duda, no se escribe). Al estar en Redis lo ven todas las instancias.
+- Preferencias por usuario (`preferencias:<sub>`); el reporte y la auditoría guardan quién lo
+  pidió (`metadatos.usuario`).
+- Postman: casos 401, 403 por rol y el ciclo del modo pánico.
+- **Cierre:** README (seguridad, roles, Auth0 paso a paso), `RESPUESTAS-PARTE-6.md`,
+  `/code-review` + `/security-review`, merge a `main`, mensaje al profesor.
 
-### Sesión 6 — Auditoría en MongoDB
-- `src/datos/modelos/registroAuditoriaModelo.ts` — schema Mongoose como el del ejemplo:
-  `operacion` (`CREAR | ACTUALIZAR | ELIMINAR`), `entidad`, `entidadId`, `antes` /
-  `despues` / `metadatos` como `Mixed`, `ocurridoEn`, índice `{ entidadId, ocurridoEn: -1 }`.
-- `src/datos/auditoriaRepositorio.ts` — `registrar()`, `historialDe(entidadId)`, `listar(filtros)`.
-- `activosServicio.ts`: después de cada escritura en MySQL dispara el registro en Mongo
-  (crear → `despues`; actualizar → `antes` y `despues`; eliminar → `antes`). La
-  conversión de moneda del pipeline viaja en `metadatos`.
-- Si Mongo falla después de que MySQL confirmó: se loguea el error y la request responde
-  bien igual (la operación ya ocurrió). Se documenta el riesgo y Transactional Outbox
-  como mejora, que es la discusión que plantea la guía del ejemplo.
-- Endpoints de lectura: `GET /api/activos/:id/historial` (funciona aunque el activo ya
-  esté borrado) y `GET /api/auditoria?operacion=`.
+### Sesión 13 — CQRS: comandos, consultas y publicación de eventos
+- `activosServicio.ts` se separa en `servicios/comandos/activosComandos.ts` (crear, actualizar,
+  eliminar: pipeline + MySQL + publicar) y `servicios/consultas/activosConsultas.ts` (listar,
+  obtener, precio, historial: Redis primero, MySQL si no está y se guarda en Redis).
+- `src/eventos/eventoActivo.ts`: contrato Zod versionado (`idEvento`, `tipo`
+  `ACTIVO_CREADO | ACTIVO_ACTUALIZADO | ACTIVO_ELIMINADO`, `activoId`, `antes`, `despues`,
+  `camposModificados`, `metadatos` con usuario y conversión, `ocurridoEn`).
+- `src/eventos/publicador.ts`: `PUBLISH activos-actualizaciones` después de que MySQL confirma;
+  si Redis falla, se loguea y la operación responde bien (mismo criterio que la auditoría).
+- En esta sesión los comandos **siguen** actualizando caché y auditoría directamente (nadie
+  escucha todavía); se ve el canal con `redis-cli SUBSCRIBE`. La app queda andando.
+- Tests: comandos con repo y publicador falsos; consultas (hit, miss, Redis caído); contrato.
 
-### Sesión 7 — API en Compose y cierre
-- Servicio `api` en `docker-compose.yml`: build del `Dockerfile` existente,
-  `env_file: .env`, `MYSQL_HOST=mysql` y `MONGO_HOST=mongodb`, `depends_on` con
-  `condition: service_healthy`. `.dockerignore` suma `Contextos` y `pruebas`.
-- Postman: requests de historial/auditoría, y un paso inicial de limpieza para que la
-  colección se pueda correr dos veces seguidas (ahora los datos persisten).
-- Docs: README (compose, variables, migraciones, modelo de datos),
-  `RESPUESTAS-PARTE-4.md` (decisiones, MySQL vs Mongo, consistencia entre bases,
-  dificultades), bitácora final.
-- `/code-review` de la Parte 4 y `/security-review` (credenciales, compose).
-- Mensaje final para el profesor.
+### Sesión 14 — Pub/Sub: suscriptores y cierre de la Parte 7
+- `src/procesos/suscriptorProyecciones.ts`: dos conexiones (`subscribe` + `duplicate()` para
+  datos) y Mongo. Por evento: (1) `SET`/`DEL activo:<id>` y `DEL activos:todos`;
+  (2) `ZREM` del ranking al eliminar y `HINCRBY estadisticas:eventos-activos`; (3) auditoría en
+  Mongo, idempotente por `idEvento` (índice único).
+- Los comandos dejan de tocar caché y auditoría: solo MySQL + publicar (lo que pide la letra).
+- `src/procesos/suscriptorNotificaciones.ts` (bonus): si el monto supera el `limiteAlertaUsd`
+  de las preferencias del usuario (o `UMBRAL_MONTO_USD`), log "Notificación enviada al usuario".
+  Reutiliza la regla de Whale Alert de `filtroAnalisisRiesgo.ts` (se extrae a una función).
+- Compose: dos servicios más, misma imagen. Scripts `npm run suscriptor:*`.
+- Demostración del reto: con el suscriptor parado, el evento se pierde; con el worker parado, el
+  job de BullMQ espera y se procesa al volver.
+- README "CQRS y rendimiento" con evidencia: `Com_select` de MySQL antes/después de N lecturas
+  cacheadas. Consistencia eventual documentada (ventana entre el 201 y el suscriptor; TTL como
+  red de seguridad).
+- **Cierre:** `RESPUESTAS-PARTE-7.md` (CQRS, Pub/Sub vs BullMQ, reto, Streams/Outbox como
+  mejora), `/code-review`, merge a `main`, mensaje al profesor.
+
+### Sesión 15 — PM2 cluster, salud, cierre ordenado y monitor de reinicios
+- `pm2` como dependencia. `ecosystem.config.cjs`: `api` en cluster
+  (`instances: PM2_INSTANCES ?? "max"`, `autorestart`, `max_memory_restart: "300M"`,
+  `wait_ready`, `kill_timeout` > tiempo de cierre); worker y suscriptores en fork con **una**
+  instancia (no se multiplican con la API); `monitor-reinicios`.
+- Docker: cada contenedor corre `pm2-runtime ecosystem.config.cjs --only <app>` (el de la API
+  junto con el monitor). `process.send('ready')` al escuchar.
+- Migraciones: servicio de una sola ejecución en compose del que dependen los demás;
+  `MIGRAR_AL_ARRANCAR` (true en `.env` para `npm run dev`, false en compose) para que 16
+  instancias no migren a la vez.
+- `GET /salud`: chequea MySQL, Mongo y Redis en paralelo con tiempo máximo → 200 `ok` o 503
+  `degradado`, con el detalle por base, `pid` e instancia. Header `X-Instancia` en todas las
+  respuestas (k6 cuenta el reparto).
+- Cierre ordenado en todos los procesos: HTTP deja de aceptar, espera lo pendiente, cierra la
+  cola, Redis, Sequelize y Mongoose; el worker espera el job activo.
+- `src/procesos/monitorReinicios.ts`: escucha el bus de PM2 y, si una instancia reinicia más de
+  5 veces en 60 s, `logger.error` marcado como crítico. La ventana deslizante es una función
+  pura con tests. (Plan B si el bus no anda dentro de `pm2-runtime`: contador en Redis al arrancar.)
+- Verificación: `pm2 ls`, `kill -9` de una instancia, 6 kills seguidos → log crítico,
+  `pm2 reload api` con una petición lenta en curso, `docker compose stop worker-reportes` con un
+  job a medias.
+
+### Sesión 16 — Pruebas de carga y cierre de la Parte 8
+- k6 en compose (perfil `carga`, imagen `grafana/k6`, como el laboratorio). `carga/prueba-carga.js`:
+  `setup()` pide un token TRADER a Auth0 y crea activos semilla; escenarios en paralelo con 100
+  usuarios: **lectura** (80, `GET /api/activos/:id` desde Redis) y **escritura** (20, `POST` +
+  `DELETE` en USD: pipeline + MySQL + evento). Umbrales p95 < 500 ms, fallas < 1 %, 0 5xx;
+  contadores por instancia y tasa de `X-Cache: HIT`.
+- Corridas en la misma máquina: 1 instancia vs `max` (16) y, por la RAM, también 4. Tabla con
+  req/s, p50, p95, p99 y errores por escenario.
+- `pm2 monit` durante el estrés: lo abrís vos y sacás capturas (es interactivo); yo dejo
+  `pm2 jlist` y `docker stats` como respaldo.
+- **Cierre:** `RESPUESTAS-PARTE-8.md` con resultados e interpretación (dónde está el cuello de
+  botella, por qué más procesos no siempre ayudan), README (PM2, salud, carga),
+  `/code-review` + `/security-review` final, merge a `main`, mensaje final al profesor.
 
 ## Documentación del trabajo en conjunto
 
-`BITACORA.md`, una entrada por sesión con: fecha · objetivo · modelo y esfuerzo · modo
-(plan / implementación) · skills y herramientas usadas · decisiones (quién eligió y por
-qué) · qué se verificó y con qué resultado · pendientes.
+- **Entrada de la sesión 8** (ya escrita en `BITACORA.md`):
+  2026-10-30 · Planificación · Opus 5.5 · esfuerzo extra alto · modo plan. Lectura de las 4 letras
+  y los 2 ejemplos, del código y de la bitácora; consultas de solo lectura (versiones en npm,
+  puertos, núcleos, Docker). Sin subagentes ni skills. Decisiones de la tabla de arriba.
+  Hallazgos: el PDF de la Parte 7 dice "Parte 6"; la Parte 6 dice "etapa final" pero hay dos más;
+  Bull en mantenimiento; Docker Desktop apagado; la máquina tiene 16 núcleos y 7,8 GB de RAM;
+  `PLAN.md` decía que faltaba el merge de la Parte 4 pero ya está en `main`.
+- Cada sesión: fecha · modelo y esfuerzo · modo · skills y herramientas · decisiones (quién y por
+  qué) · verificación · pendientes. Toda skill va también a la tabla resumen de `BITACORA.md`.
+- Al cerrar cada parte: mensaje al profesor en primera persona.
 
-Entrada de la sesión 0 (se escribe al empezar la sesión 1):
-- 2026-10-05 · Planificación · Opus 5.5 · esfuerzo alto · modo plan (solo lectura).
-- Exploración directa de código, letras y ejemplo, sin subagentes.
-- Hallazgo: la Parte 3 no estaba implementada ni estaba la letra; la agregaste durante la sesión.
-- Decisiones tuyas: Parte 3 antes que Parte 4, Umzug, sin `User`.
-- Decisiones propuestas por Claude: Winston, Jest sin `ts-jest`, auditoría best-effort,
-  Zod para reemplazar la validación manual, nombres en español en tablas y colecciones.
-- Docker Desktop estaba apagado: hay que prenderlo desde la sesión 4.
+**Modelo sugerido** (lo que se use de verdad queda en la bitácora): Sonnet 5.5 · alto para las
+sesiones 9, 10, 12, 13 y 16; Opus 5.5 · alto para la 11 (seguridad y configuración externa), la 14
+(consistencia asíncrona) y la 15 (cluster, señales y Docker).
 
-Sugerencia de modelo por sesión (lo que se use de verdad queda en la bitácora):
-Sonnet 5.5 · medio para las sesiones 2, 3, 5 y 6; Opus 5.5 · alto para la 1 y la 4
-(configuración con riesgo: Jest + ESM + TS 7, Umzug) y para la 7 (integración y revisión).
-
-Skills previstas: modo plan (esta sesión), `/init` para `CLAUDE.md`, `/code-review` al
-cerrar cada parte, `/security-review` al final, `/simplify` si alguna sesión queda cargada.
+**Skills previstas:** `/code-review` (high) al cerrar cada parte; `/security-review` al cerrar la
+Parte 6 (autenticación) y la 8 (sistema completo); `/simplify` si una sesión queda cargada.
 
 ## Riesgos conocidos
 
-- **TypeScript 7** con los tipos de Sequelize 6, Mongoose 9 y Zod: se valida con
-  `npm run check` apenas se instalan. Plan B: fijar TypeScript 5.9, como el ejemplo.
-- **Jest + ESM** es experimental; el plan B es `@swc/jest`.
-- **DECIMAL → number** en el repositorio pierde precisión extrema; se acepta para no
-  cambiar el contrato JSON y se documenta.
-- **Migraciones al arrancar**: cómodo con una sola instancia; con varias haría falta un
-  paso separado. Se documenta.
+- **RAM (7,8 GB) con `instances: "max"` = 16 procesos** + 3 bases + Docker: puede no entrar. El
+  ecosistema define `max` (lo pide la letra) pero `PM2_INSTANCES` permite medir con menos.
+- **Conexiones**: 16 instancias × pool de Sequelize (5) = 80 conexiones a MySQL (límite 151). Se
+  revisa antes de la prueba.
+- **Tipos** de BullMQ, `redis` y `jose` con TypeScript 7: `npm run check` apenas se instalan.
+- **Pub/Sub pierde mensajes** si el suscriptor está caído: auditoría y caché dependen de él desde
+  la sesión 14. Se documenta y se demuestra; TTL como red de seguridad.
+- **Auth0** en ejecución: si no responde, no se pueden bajar las JWKS (`jose` las cachea). Los
+  tests no lo necesitan. El profesor necesita credenciales de prueba para probar a mano.
+- **Postman/Newman** desde la Parte 6 necesitan tokens: entorno local fuera del repo.
+- **PM2 y ESM**: si no carga `ecosystem.config.js` con `"type": "module"`, se usa `.cjs`.
 
 ## Verificación
 
-Al cierre de cada sesión:
-- `npm run check` y `npm test` en verde.
-- `npm run dev` + colección de Postman completa (o los `curl` del README).
+Al cierre de cada sesión: `npm run check`, `npm test`, `docker compose up -d --build --wait` con
+todo `healthy`, Newman dos veces seguidas.
 
-Parte 3:
-- POST con `" btc "` devuelve `BTC`; POST con `moneda: "EUR"` guarda el precio en USD;
-  body inválido devuelve 400 con todos los errores.
-- `POST /api/activos/analizar` con un lote mixto: descarta los ≤ 0, marca `high_risk`,
-  redondea.
-- En consola aparece una línea por filtro y, ante un error, cuál falló.
-
-Parte 4:
-- `docker compose up -d --wait` → las tres piezas `healthy`.
-- `docker compose exec mysql mysql ... -e "SELECT * FROM activos"` muestra lo creado por la API.
-- `mongosh` / Compass: un documento por operación, con `antes`/`despues` en las actualizaciones.
-- Reiniciar la API y comprobar que los activos siguen ahí.
-- `npm run migrar:deshacer` + `npm run migrar` recrea la tabla.
-- Bajar Mongo y crear un activo: responde 201 y queda el error en el log.
+- **Parte 5**: `GET` por id dos veces → `MISS` y `HIT` (`redis-cli TTL activo:<id>`); PUT →
+  siguiente `MISS` con el dato nuevo; Redis caído → lecturas 200 desde MySQL, preferencias y
+  reporte 503; reporte 202 → polling → `completado`, registro `GENERAR_REPORTE` en Mongo, log de
+  `completed`, contador +1; CoinGecko roto → 3 intentos y `failed`; worker parado → el job espera
+  y se procesa al volver.
+- **Parte 6**: sin token / basura / vencido → 401; AUDITOR `POST` → 403; TRADER estadísticas →
+  403; ADMIN todo; limpiar caché no toca jobs ni preferencias; ciclo del modo pánico.
+- **Parte 7**: `SUBSCRIBE` muestra los eventos; la auditoría la escribe el suscriptor; PUT → el
+  `GET` siguiente trae el dato nuevo desde Redis; suscriptor parado → evento perdido; Whale Alert
+  en el log de notificaciones; `Com_select` casi no se mueve con lecturas cacheadas.
+- **Parte 8**: `pm2 ls` con N instancias; `/salud` 200 → bajar Redis → 503; kill → reinicio;
+  6 kills en 1 min → log crítico; reload con petición lenta → termina 200; tabla de k6.
 
 ## Mensaje de encare para el profesor (borrador)
 
-> Hola profe, le cuento cómo estoy encarando las partes 3 y 4 del ejercicio de la API cripto.
+> Hola profe, le cuento cómo voy a encarar las partes 5 a 8 del ejercicio de la API cripto.
 >
-> Trabajo con Claude Code. Antes de escribir código hice una sesión solo de planificación
-> (modelo Opus 5.5, esfuerzo alto, en modo plan, que es de solo lectura): le pasé las
-> letras y el ejemplo de bases de datos, revisó el código que ya tenía y armamos un plan
-> en 7 sesiones cortas. Las decisiones las fui tomando yo sobre opciones que me planteaba
-> con sus pros y contras.
+> Igual que antes, trabajo con Claude Code. Empecé con una sesión solo de planificación (modelo
+> Opus 5.5 con esfuerzo extra alto, en modo plan, que no modifica nada): le pasé las cuatro letras
+> y los dos ejemplos nuevos (Pub/Sub con Redis y el laboratorio de PM2), revisó cómo quedó el
+> proyecto después de la Parte 4 y armamos un plan de ocho sesiones, dos por parte. Cada parte la
+> cierro con tests, revisión de código y prueba manual antes de empezar la siguiente.
 >
-> Lo principal que definimos:
-> - Hacer primero la Parte 3 (Pipes & Filters) y después la Parte 4, porque me faltaba la 3.
-> - Parte 3: un runner de pipeline tipado, filtros como unidades independientes con sus
->   dependencias inyectadas para poder testearlos sin red, Zod para validar, Winston para
->   el logging y Jest para los tests.
-> - Parte 4: MySQL con Sequelize para los activos y MongoDB con Mongoose para la
->   auditoría, siguiendo el ejemplo de clase. Migraciones con Umzug en vez de
->   sequelize-cli, porque el proyecto es ESM y corre TypeScript sin transpilar.
-> - La entidad User opcional la dejé fuera: sin autenticación no aporta.
-> - Si falla la escritura de auditoría en Mongo después de que MySQL confirmó, la API
->   responde bien y deja el error en el log. Lo dejo documentado como limitación.
+> Lo principal que decidí:
+> - **Parte 5:** Redis con el cliente oficial para la caché de activos (con TTL), las
+>   preferencias (Hash) y contadores atómicos. Para la cola de reportes uso BullMQ en lugar de
+>   Bull, porque Bull está en modo mantenimiento y sus mismos autores recomiendan BullMQ; los
+>   conceptos de la letra (cola, worker, eventos completed/failed) son los mismos. El worker corre
+>   como un proceso aparte.
+> - **Parte 6:** Auth0 como proveedor de identidad. La API valida la firma de los JWT con las
+>   JWKS de Auth0 y los roles AUDITOR, TRADER y ADMIN vienen en el token. Los tests generan sus
+>   propias claves, así que no dependen de internet. El Panic Mode vive en Redis para que lo vean
+>   todas las instancias.
+> - **Parte 7:** separo comandos y consultas; las consultas leen primero de Redis. Después de
+>   cada escritura en MySQL la API publica un evento, y dos procesos suscriptores actualizan la
+>   caché, los contadores y la auditoría, o avisan de las Whale Alerts. Voy a mostrar en la
+>   práctica que Pub/Sub pierde el mensaje si el suscriptor está caído, y que la cola de BullMQ no.
+> - **Parte 8:** PM2 en modo cluster solo para la API; el worker y los suscriptores van con una
+>   instancia cada uno para no duplicar trabajo, y las migraciones pasan a ser un paso aparte para
+>   que las instancias no las corran a la vez. Pruebas de carga con k6, una instancia contra el
+>   cluster.
 >
-> Voy llevando una bitácora en el repo con cada sesión: qué modelo y esfuerzo usé, qué
-> decidimos y por qué, y qué se verificó. Cuando termine cada parte le mando el resumen.
+> Mantengo los nombres en español, como en el resto del proyecto, con una tabla en el README que
+> los relaciona con los de la letra. Sigo llevando la bitácora en el repo (modelo y esfuerzo de
+> cada sesión, qué decidimos y quién, y qué se verificó). Al cerrar cada parte le mando el resumen.

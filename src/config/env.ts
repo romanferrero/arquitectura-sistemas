@@ -57,6 +57,43 @@ export function mongoUri(): string {
   return `mongodb://${usuario}:${password}@${host}:${puerto}/${base}?authSource=admin&directConnection=true`;
 }
 
+/**
+ * URL de Redis. Igual que mongoUri(), es una FUNCION: los comandos que no usan Redis
+ * (migrar) no exigen tener configuradas sus variables. La password se codifica por si
+ * trae caracteres reservados.
+ */
+export function redisUrl(): string {
+  const { host, puerto, password } = redisConfig();
+  return `redis://:${encodeURIComponent(password)}@${host}:${puerto}`;
+}
+
+/**
+ * Host, puerto y password de Redis por separado. Los usa BullMQ, que abre sus propias
+ * conexiones (con `ioredis`) a partir de estos datos y no de una URL.
+ */
+export function redisConfig(): { host: string; puerto: number; password: string } {
+  return {
+    host: textoRequerido("REDIS_HOST"),
+    puerto: numeroRequerido("REDIS_PORT"),
+    password: textoRequerido("REDIS_PASSWORD"),
+  };
+}
+
+/** Cuanto demora (simulado) el worker en generar un reporte, en milisegundos. Admite 0. */
+export function reporteDemoraMs(): number {
+  return numeroNoNegativoRequerido("REPORTE_DEMORA_MS");
+}
+
+/** Cuanto dura un activo en la cache de Redis antes de volver a leerlo de MySQL. */
+export function cacheTtlSegundos(): number {
+  const valor = numeroRequerido("CACHE_TTL_SEGUNDOS");
+  if (!Number.isInteger(valor)) {
+    console.error("[config] La variable CACHE_TTL_SEGUNDOS debe ser un entero positivo.");
+    process.exit(1);
+  }
+  return valor;
+}
+
 export const env = Object.freeze({
   PORT: numeroRequerido("PORT"),
   NODE_ENV: textoRequerido("NODE_ENV"),

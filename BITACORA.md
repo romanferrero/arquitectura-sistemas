@@ -2,11 +2,12 @@
 
 Registro de cómo se trabaja el ejercicio entre el estudiante y Claude Code: qué modelo y
 esfuerzo se usó en cada sesión, qué se decidió, quién lo decidió y cómo se verificó.
-El plan completo está en [PLAN.md](PLAN.md).
+El plan vigente (Partes 5 a 8) está en [PLAN.md](PLAN.md); el de las Partes 3 y 4, ya terminado, en
+[PLAN-PARTES-3-4.md](PLAN-PARTES-3-4.md).
 
 ## Resumen: skills y herramientas usadas
 
-Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron tres veces,
+Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron cuatro veces,
 siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUDE.md`).
 
 | Skill | Cuándo | Para qué | Resultado |
@@ -14,15 +15,16 @@ siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUD
 | `/code-review` (nivel *high*) | Cierre de la Parte 3 | Revisar lo que `develop` tenía de más que `main` | 9 hallazgos: 7 corregidos y 2 documentados |
 | `/code-review` (nivel *high*) | Cierre de la Parte 4 | Ídem, sobre las sesiones 4 a 7 | 10 hallazgos: 7 corregidos y 3 documentados |
 | `/security-review` | Cierre de la Parte 4 | Buscar vulnerabilidades en los cambios | Sin vulnerabilidades de alta confianza |
+| `/code-review` (nivel *high*) | Cierre de la Parte 5 | Ídem, sobre las sesiones 9 y 10 (Redis, BullMQ y el worker) | 9 hallazgos: 6 corregidos y 3 documentados |
 
-Las tres corren en un subproceso aparte (no comparten el contexto de la sesión). En el resto de las sesiones no se
+Las cuatro corren en un subproceso aparte (no comparten el contexto de la sesión). En el resto de las sesiones no se
 usó ninguna skill.
 
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
 correr la colección de Postman, **Docker Compose**, **Jest** y pruebas de mutación hechas a mano.
 
-Los modelos usados: Opus 5.5 en la planificación (sesión 0) y Sonnet 5.5 en la implementación (sesiones 1 a 7 y las
-revisiones), siempre con esfuerzo alto.
+Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9, 10 y
+las revisiones). Esfuerzo alto en todo, salvo la sesión 8 (planificación de las Partes 5 a 8), que fue extra alto.
 
 ---
 
@@ -573,3 +575,203 @@ ninguna variable de Mongo; parámetros repetidos → 400; tres señales seguidas
 
 **Fuera del alcance de esa revisión** (anotado como mejora en `RESPUESTAS-PARTE-4.md`): la API no tiene autenticación (ya
 era así y afecta a todos los endpoints) y la aplicación se conecta a MongoDB con el usuario root.
+
+---
+
+## Sesión 8 — Planificación de las Partes 5 a 8 · 2026-10-30
+
+- **Modelo / esfuerzo:** Opus 5.5 · esfuerzo **extra alto** (lo indicó el estudiante al pedir el plan).
+- **Modo:** plan (solo lectura). Al aprobarse el plan, el cierre documental (este archivo, `PLAN.md`, `CLAUDE.md`) se
+  hizo ya fuera del modo plan, en `feature/sesion-8-plan-partes-5-8`.
+- **Herramientas:** lectura de las cuatro letras (PDF) y de los dos ejemplos nuevos, del código actual y de la
+  bitácora; consultas de solo lectura (versiones de librerías en npm, puertos libres, núcleos y RAM, estado de Docker).
+  Preguntas de decisión al estudiante. **Sin subagentes ni skills.**
+- **Qué se leyó:** `Contextos/` con las Partes 5, 6, 7 y 8; `Ejemplo-pub-sub/` (API y dos suscriptores Redis en
+  contenedores separados) y `pm2-lab/` (PM2 en cluster dentro de Docker y k6); y el código de `src/`, `docker-compose.yml`,
+  `Dockerfile` y `package.json` tal como quedaron tras la Parte 4.
+
+**Hallazgos**
+- El PDF de la Parte 7 tiene el título "Parte 6": es un error de la letra, el contenido es CQRS y Pub/Sub.
+- La letra de la Parte 6 dice "etapa final", pero después vienen la 7 y la 8.
+- **Bull está en modo mantenimiento** (última versión en diciembre de 2024); sus autores recomiendan BullMQ.
+- La máquina tiene 16 núcleos y 7,8 GB de RAM: `instances: "max"` crearía 16 procesos y puede no entrar en memoria.
+- Docker Desktop estaba apagado.
+- `PLAN.md` decía que faltaba el merge de la Parte 4 a `main`, pero ya estaba hecho.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| Identidad con **Auth0** (opción B de la letra) | Estudiante | Es la recomendada y la primera de la lista. La API valida la firma con JWKS; los tests firman con claves propias, sin red |
+| **BullMQ** en lugar de Bull | Estudiante, a propuesta de Claude | Bull ya no se desarrolla; los conceptos (cola, worker, `completed`/`failed`) son los mismos. Se documenta el cambio |
+| Nombres en español, con tabla "letra → proyecto" en el README | Estudiante | Misma convención que en la Parte 3 (`/assets/analyze` → `/api/activos/analizar`) |
+| Una parte por vez, cada una cerrada en `main` antes de empezar la siguiente | Estudiante | Mismo flujo que las Partes 3 y 4 |
+| Worker y suscriptores como **procesos aparte** (misma imagen, otro comando) | Claude | Es el molde de los ejemplos y permite el cluster de la Parte 8 sin multiplicar el trabajo |
+| Limpiar la caché con `SCAN` + `DEL` sobre `activo:*`, nunca `FLUSHALL` | Claude | `FLUSHALL` borraría jobs, preferencias y contadores |
+| El modo pánico falla cerrado: si Redis no responde, se bloquean las escrituras | Claude | Ante la duda, no se escribe |
+| Se hacen los tres bonus (contador atómico, modo pánico, Whale Alert y reto) | Claude, a confirmar | Cada uno entra en la parte que le corresponde |
+| `GET /salud` se amplía en lugar de crear `/health` | Claude | Ya existe y lo usa el healthcheck de Docker |
+
+**Resultado:** ocho sesiones nuevas (9 a 16), dos por parte; cada parte cierra con tests, `/code-review`, prueba manual,
+merge a `main` y mensaje al profesor. Modelos sugeridos: Sonnet 5.5 para las sesiones 9, 10, 12, 13 y 16; Opus 5.5 para la 11
+(seguridad y configuración externa), la 14 (consistencia asíncrona) y la 15 (cluster, señales y Docker).
+
+**Pendientes**
+- Antes de la sesión 9: prender Docker Desktop.
+- Antes de la sesión 11: crear la cuenta de Auth0 (el paso a paso se guía en esa sesión). El profesor va a necesitar
+  credenciales de prueba para ejercitar la API a mano.
+- La memoria de Claude queda al día en `PLAN.md`; no se agregó nada nuevo.
+
+---
+
+## Sesión 9 — Redis: infraestructura, caché, preferencias y ranking · 2026-10-30
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (lo indicó el estudiante al empezar). El plan sugería Sonnet 5.5 para
+  esta sesión.
+- **Modo:** implementación, en `feature/sesion-9-redis-cache`.
+- **Herramientas:** edición de archivos, `npm install redis`, Docker Compose, `redis-cli` dentro del contenedor, `curl`,
+  Newman (vía `npx`) y pruebas de mutación a mano. Sin skills ni subagentes.
+
+**Qué se hizo**
+- [docker-compose.yml](docker-compose.yml): servicio `redis` (7.4-alpine) con contraseña, AOF, `noeviction`, healthcheck
+  autenticado, puerto solo en `127.0.0.1` y volumen. La API espera a que esté `healthy` y recibe `REDIS_HOST=redis`.
+- Variables `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` y `CACHE_TTL_SEGUNDOS`; `redisUrl()` y `cacheTtlSegundos()` en
+  `config/env.ts` (funciones, como `mongoUri()`, para que `migrar` no las exija).
+- [src/datos/redis.ts](src/datos/redis.ts): cliente oficial con el ciclo de vida de la letra (`on('error')`, `connect()` al
+  arrancar, `quit()` al cerrar). `servidor.ts` y `db:verificar` lo usan.
+- [src/servicios/crearCacheActivos.ts](src/servicios/crearCacheActivos.ts): caché cache-aside (String + TTL) y ranking de
+  consultas (Sorted Set). `GET /api/activos/:id` informa `X-Cache: HIT | MISS`; `PUT` y `DELETE` invalidan.
+- [src/servicios/crearServicioPreferencias.ts](src/servicios/crearServicioPreferencias.ts): `GET` y `PUT /api/preferencias`
+  sobre un Hash (`HSET` / `HGETALL`), validadas con Zod.
+- Tests con un Redis falso en memoria ([pruebas/ayudas/redisFalso.ts](pruebas/ayudas/redisFalso.ts)), 11 requests nuevos en
+  Postman y README con la sección de Redis.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| La caché es de **mejor esfuerzo** (Redis caído → se sirve de MySQL); las preferencias dan **503** | Claude | La caché es una copia; las preferencias solo existen en Redis y no hay nada que devolver |
+| Solo la lectura pública por id usa la caché | Claude | Actualizar y eliminar deciden con el dato real de MySQL |
+| `disableOfflineQueue` y no reintentar al arrancar | Claude | Con Redis caído los comandos fallan en el acto (un `GET` respondió en 6 ms) y la API no levanta sin Redis, igual que con las otras bases |
+| `cerrarRedis()` aparte de `cerrarConexiones()` (**cambia el plan**, que decía sumarlo a esta) | Claude | `conexiones.ts` lo importa `migrar`, que no debe exigir las variables de Redis |
+| La lógica cache-aside vive en la fábrica (`consultar`) y no en `activosServicio` | Claude | Así se prueba sin Redis real; hubo que moverla después de ver que quedaba sin test |
+| `PUT /api/preferencias` actualiza solo los campos enviados | Claude | Con un Hash tiene sentido tocar un campo sin pisar el otro. Una sola billetera por ahora; por usuario en la Parte 6 |
+| Los requests de Postman se agregan en esta sesión, no al cerrar la Parte 5 | Claude | Se pueden verificar ya, y cada sesión deja la colección en verde |
+| `describirError` muestra el código de un `AggregateError` | Claude | El error de Redis sin servidor decía solo "AggregateError"; ahora dice `ECONNREFUSED` |
+
+**Hallazgo: la invalidación se puede perder.** Con Redis caído, un `PUT` no puede invalidar la clave; al volver Redis (los
+datos persisten por AOF) un `GET` devolvió `cantidad: 1` cuando MySQL ya tenía `3`, hasta que venció el TTL de 60 s. Es el
+costo de una caché de mejor esfuerzo, y la razón de mantener un TTL corto. Queda documentado en el README; la Parte 7 (CQRS y
+Pub/Sub) vuelve sobre cómo sincronizar la caché.
+
+**Verificación**
+- `npm run check` y `npm run build` sin errores; `npm test`: 17 suites, **187 tests** en verde (29 nuevos).
+- Mutaciones (3): no guardar el activo tras un MISS, guardarlo sin TTL y no validar el id leído de la caché → las 3 detectadas.
+- Redis real: `MISS` y luego `HIT` con `TTL` descontando; el `PUT` borra la clave y la siguiente lectura es `MISS` con el
+  dato nuevo; el `DELETE` borra la clave y saca el id del ranking; un id inexistente da 404 y no deja rastro en Redis.
+- Preferencias: valores por defecto, `PUT` completo y parcial, `HGETALL` coincide, y un cuerpo inválido da 400 con los dos errores.
+- **Redis detenido con la API corriendo:** `GET` por id → 200 (desde MySQL), preferencias → 503, `POST` → 201 y `PUT` → 200.
+  Al volver Redis, la API se reconectó sola.
+- Arranque con Redis detenido: `db:verificar` falla en 2,8 s con "No se pudo conectar a Redis".
+- Newman, dos corridas seguidas, tanto con la API local como con la API **dentro de Docker**: 81 aserciones, 0 fallas.
+- Compose: los cuatro servicios `healthy`; Redis exige contraseña (`NOAUTH` sin ella) y la contraseña no aparece en
+  `docker inspect`; `docker compose stop api` (SIGTERM real) cierra con código 0.
+
+**Pendientes / a tener en cuenta**
+- El arranque desde cero (`docker compose down -v`) no se repitió en esta sesión: no se tocó nada de MySQL y Mongo, y Redis
+  no tiene una fase de inicialización como esas.
+- Los contenedores quedan corriendo al cerrar la sesión.
+- Siguiente: sesión 10 (BullMQ: cola de reportes y worker), que cierra la Parte 5.
+
+---
+
+## Sesión 10 — BullMQ: cola de reportes y worker · 2026-10-30
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (igual que la sesión 9; el estudiante dijo "seguimos" después de que se
+  apagó la computadora y no se cambió nada).
+- **Modo:** implementación, en `feature/sesion-10-bullmq-reportes`.
+- **Contexto:** antes de empezar se comprobó que el repo, `develop` publicada y los volúmenes de Docker estaban intactos tras
+  el apagón (los contenedores se reiniciaron solos).
+- **Herramientas:** edición de archivos, `npm install` (`bullmq`, `ioredis`), Docker Compose, `redis-cli` y `mongosh` dentro de
+  los contenedores, `curl`, Newman y scripts descartables de prueba de humo. Sin skills ni subagentes (el `/code-review` de
+  cierre de la Parte 5 se registra aparte).
+
+**Qué se hizo**
+- Cola `cola-reportes` con BullMQ: [src/colas/colaReportes.ts](src/colas/colaReportes.ts) (productor) y
+  [src/servicios/crearServicioReportes.ts](src/servicios/crearServicioReportes.ts).
+- `POST /api/activos/reporte` → **202** con `Location` y el id; `GET /api/reportes/:id` → estado (`en_cola`, `procesando`,
+  `completado`, `fallido`), progreso, resultado o motivo; `GET /api/estadisticas` → reportes exitosos y los 5 activos más consultados.
+- [src/reportes/](src/reportes/): `generarReporte` (valoración masiva con una sola llamada a CoinGecko, demora simulada y
+  progreso), `procesadorReporte` (genera + audita), `eventosWorker` (`completed` / `failed` a Winston, `INCR` del contador) y
+  `estadoReporte`. Todo con dependencias por parámetro.
+- Worker como proceso aparte: [src/procesos/workerReportes.ts](src/procesos/workerReportes.ts), `npm run worker` y servicio
+  `worker-reportes` en el compose (misma imagen, otro comando).
+- `preciosServicio.obtenerPrecios` (varios símbolos, una llamada); auditoría con `GENERAR_REPORTE` y entidad `Reporte`.
+- 5 requests de Postman nuevos (con *polling*), README (cola, worker, tabla "letra → proyecto") y
+  [RESPUESTAS-PARTE-5.md](RESPUESTAS-PARTE-5.md).
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| BullMQ en lugar de Bull | Estudiante, a propuesta de Claude (sesión 8) | Bull está en mantenimiento |
+| BullMQ con **`ioredis`**, no con el cliente oficial `redis` (**cambia el plan**) | Claude | El plan decía que BullMQ "trae `ioredis`"; en la versión 6 es opcional. Se probó el adaptador del cliente oficial con un script: el flujo normal anduvo pero una caída de Redis tumbaba el proceso y la recuperación no fue limpia. Con `ioredis` el mismo guion pasó completo |
+| El worker es otro proceso, misma imagen | Claude (según el plan) | Se detiene o reinicia sin tocar la API; no se multiplica con el cluster de la Parte 8 |
+| Un fallo al auditar un reporte **hace fallar el trabajo** | Claude | Un reporte se regenera y la cola reintenta; a diferencia del CRUD no hay una operación irreversible detrás |
+| La cola falla en el acto con Redis caído (`enableOfflineQueue: false`) → 503 | Claude | Si no, `add` queda esperando y la API no puede responder |
+| Un id de reporte que no es UUID da 404 sin consultar Redis | Claude | `GET /api/reportes/meta` habría leído la configuración interna de la cola |
+| 3 intentos con espera 1 s y 2 s; trabajos terminados se borran a la hora, los fallidos al día | Claude | Fallos pasajeros no pierden el reporte; Redis no crece sin límite |
+| Los símbolos sin cotización van a `sinPrecio` y no hacen fallar el reporte | Claude | Un símbolo raro no debe invalidar todo el portafolio |
+| El resultado del reporte vive en el trabajo (Redis), no en una base | Claude | Alcanza para la letra; queda como mejora |
+| Los requests de Postman se agregan en esta sesión | Claude | Cada sesión deja la colección en verde |
+
+**Verificación**
+- `npm run check` y `npm run build` sin errores; `npm test`: 23 suites, **242 tests** en verde (55 nuevos: generador, procesador,
+  eventos, servicio de reportes, estadísticas, estados y configuración de la cola).
+- Prueba de humo previa contra el Redis real (BullMQ + `ioredis`): éxito con progreso, reintentos, `add` con Redis caído falla en
+  1 ms, y tras volver Redis el productor y el worker siguen funcionando.
+- En Docker (API + worker + 3 bases, todo `healthy`): `POST` → 202 en 0,2 s; el seguimiento muestra `procesando` 10 % → 53 % →
+  78 % → `completado`; el resultado valúa BTC y ETH y deja `RARO` en `sinPrecio`; el log dice `completado` con el contador en 1;
+  en MongoDB hay un `GENERAR_REPORTE` sobre la entidad `Reporte`.
+- **CoinGecko roto** (worker apuntando a una URL que no responde): 3 intentos con espera creciente, estado `fallido` con el motivo,
+  el contador no cambia y no hay registro de auditoría.
+- **Worker detenido:** el pedido queda `en_cola` y se procesa al volver el worker.
+- **Cierre ordenado:** `docker compose stop worker-reportes` a mitad de un reporte lo termina y sale con código 0 en 1,7 s.
+- **Redis detenido:** `POST /api/activos/reporte`, `GET /api/reportes/:id` y `GET /api/estadisticas` → 503; `GET /api/activos`
+  (MySQL) → 200; al volver Redis todo se recupera solo.
+- Newman, dos corridas seguidas, API en Docker: 96 y 95 aserciones, 0 fallas (la diferencia es el *polling*).
+
+**Hallazgos y pendientes**
+- **Límite gratuito de CoinGecko (HTTP 429):** una corrida de Newman hizo fallar un reporte tras 3 intentos. El sistema se
+  comportó como debe, pero deja la colección intermitente si se corre muchas veces seguidas; el test ahora informa el motivo y
+  el README lo advierte. Mejora anotada: respetar `Retry-After` y cachear cotizaciones en Redis.
+- **Nunca se probó más de un worker a la vez**, ni el `INCR` bajo concurrencia real; se afirma solo que es atómico por el comando.
+- `POST /api/activos/reporte` es la operación más cara de la API y hoy no tiene autenticación: la Parte 6 la deja solo para el ADMIN.
+- Siguiente: cierre de la Parte 5 (`/code-review`, correcciones, OK del estudiante, merge a `main` y mensaje al profesor).
+
+---
+
+## Revisión de código de la Parte 5 · 2026-10-30
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
+- **Skill usada:** `/code-review` en nivel *high* sobre lo que `develop` tenía de más que `main` (sesiones 8 a 10). Devolvió **9
+  hallazgos**, que se evaluaron uno por uno en `fix/revision-parte-5`.
+
+| # | Hallazgo | Decisión |
+|---|---|---|
+| 1 | MySQL no distingue mayúsculas en los ids pero las claves de Redis sí: un mismo activo tenía varias claves, y un `PUT` o `DELETE` con otras mayúsculas dejaba la entrada vieja | **Corregido:** todo lo que toca Redis usa el id en minúsculas (4 tests nuevos; verificado con la API real) |
+| 2 | Si falla la invalidación (Redis con un corte breve), la caché sirve el dato viejo hasta el TTL | **No se corrige.** Es el límite ya documentado de una caché de mejor esfuerzo (se vio en la sesión 9); la Parte 7 vuelve sobre esto |
+| 3 | Si Redis responde lento (más de 2 s) el `add` puede encolar después de dar 503, y un reintento genera dos reportes | **Documentado** en el código, el README y `RESPUESTAS-PARTE-5.md`; con Redis caído no pasa. Se resolvería con una clave de idempotencia |
+| 4 | La carrera contra un tiempo máximo estaba copiada en la auditoría y en los reportes | **Corregido:** helper `conTiempoMaximo` compartido, con 5 tests |
+| 5 | El `ZINCRBY` del ranking se esperaba en la ruta caliente de la lectura | **Corregido:** ya no se espera (nunca rechaza), con lo que el `GET` hace un solo viaje a Redis en un HIT |
+| 6 | El cierre del worker no tenía `.catch`: con Redis caído al apagar moría sin cerrar las conexiones ni loguear | **Corregido:** se loguea, se cierra el resto y sale con código 1 |
+| 7 | El contador de reportes puede perder un conteo (si el worker cae justo después de completar) o duplicarlo (si se reprocesa) | **Documentado** como mejora (`SADD` por id de reporte); ya era de mejor esfuerzo |
+| 8 | Un fallo de MySQL al buscar un símbolo hacía fallar con 500 todas las estadísticas | **Corregido:** se devuelve el dato de Redis sin el símbolo y se loguea |
+| 9 | `CLAUDE.md` decía que `REDIS_*` se lee con `redisUrl()`, pero se sumó `redisConfig()` para BullMQ | **Corregido:** la documentación nombra las dos |
+
+**Verificación:** `check` y 252 tests en verde (10 nuevos). Mutaciones: sin normalizar el id → 4 tests fallan; sin degradar las estadísticas →
+1 falla. Con la API real: un `GET` con el id en mayúsculas da `MISS` y luego `HIT`, hay una sola clave en Redis, el `PUT` con
+mayúsculas invalida y el ranking no se parte. Newman, dos corridas: 96 aserciones, 0 fallas. `docker compose stop worker-reportes` a
+mitad de un reporte lo termina y sale con código 0.
+
+**Pendiente:** el OK del estudiante para el merge de `develop` a `main` y el mensaje al profesor.

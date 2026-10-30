@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import { logger } from "../config/logger.ts";
 import { cerrarConexiones, conectarMongo, conectarMysql, sequelize } from "./conexiones.ts";
 import { describirError } from "./describirError.ts";
+import { cerrarRedis, conectarRedis, redis } from "./redis.ts";
 
 /**
  * Comprueba que las dos bases respondan con la configuracion del .env:
@@ -30,5 +31,15 @@ try {
   logger.error(`MongoDB no responde: ${describirError(error)}`);
 }
 
+try {
+  await conectarRedis();
+  const info = await redis.info("server");
+  logger.info(`Redis OK (version ${/redis_version:(\S+)/.exec(info)?.[1] ?? "desconocida"})`);
+} catch (error) {
+  fallo = true;
+  logger.error(`Redis no responde: ${describirError(error)}`);
+}
+
 await cerrarConexiones();
+await cerrarRedis();
 if (fallo) process.exitCode = 1;
