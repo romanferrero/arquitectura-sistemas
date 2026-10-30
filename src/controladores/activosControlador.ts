@@ -23,9 +23,10 @@ export async function listar(req: Request, res: Response): Promise<void> {
   res.status(200).json(await servicio.listarActivos(simbolo));
 }
 
-// GET /api/activos/:id
+// GET /api/activos/:id  (X-Cache indica si salio de Redis o hubo que ir a MySQL)
 export async function obtener(req: Request<{ id: string }>, res: Response): Promise<void> {
-  res.status(200).json(await servicio.obtenerActivo(req.params.id));
+  const { activo, cache } = await servicio.consultarActivo(req.params.id);
+  res.status(200).set("X-Cache", cache).json(activo);
 }
 
 // POST /api/activos

@@ -6,7 +6,8 @@
   },
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:3000" },
-    { "key": "idActivo", "value": "" }
+    { "key": "idActivo", "value": "" },
+    { "key": "idCache", "value": "" }
   ],
   "item": [
     {
@@ -761,6 +762,377 @@
             "type": "text/javascript",
             "exec": [
               "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "27 - Cache: crear un activo para probarla",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"simbolo\": \"DOGE\",\n  \"nombre\": \"Dogecoin\",\n  \"cantidad\": 1000,\n  \"precioCompra\": 0.15\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/activos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 Created', () => pm.response.to.have.status(201));",
+              "pm.collectionVariables.set('idCache', pm.response.json().id);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "28 - Cache: primera lectura (MISS, viene de MySQL)",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/{{idCache}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos",
+            "{{idCache}}"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('X-Cache: MISS', () => pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "29 - Cache: segunda lectura (HIT, viene de Redis)",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/{{idCache}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos",
+            "{{idCache}}"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('X-Cache: HIT', () => pm.expect(pm.response.headers.get('X-Cache')).to.eql('HIT'));",
+              "pm.test('mismo contenido', () => pm.expect(pm.response.json().cantidad).to.eql(1000));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "30 - Cache: actualizar el activo (invalida la cache)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"simbolo\": \"DOGE\",\n  \"nombre\": \"Dogecoin\",\n  \"cantidad\": 2500,\n  \"precioCompra\": 0.15\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/{{idCache}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos",
+            "{{idCache}}"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('cantidad actualizada', () => pm.expect(pm.response.json().cantidad).to.eql(2500));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "31 - Cache: lectura tras el PUT (MISS con el dato nuevo)",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/{{idCache}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos",
+            "{{idCache}}"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('X-Cache: MISS', () => pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS'));",
+              "pm.test('trae el dato nuevo', () => pm.expect(pm.response.json().cantidad).to.eql(2500));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "32 - Cache: eliminar el activo",
+      "request": {
+        "method": "DELETE",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/{{idCache}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos",
+            "{{idCache}}"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "33 - Cache: el activo eliminado ya no sale de la cache (404)",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/{{idCache}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos",
+            "{{idCache}}"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+              "pm.test('sin X-Cache', () => pm.expect(pm.response.headers.has('X-Cache')).to.be.false);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "34 - Preferencias: guardar moneda y limite (HSET)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"monedaVisualizacion\": \"uyu\",\n  \"limiteAlertaUsd\": 5000\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/preferencias",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "preferencias"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test('moneda en mayusculas', () => pm.expect(r.monedaVisualizacion).to.eql('UYU'));",
+              "pm.test('limite guardado', () => pm.expect(r.limiteAlertaUsd).to.eql(5000));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "35 - Preferencias: leerlas (HGETALL)",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/preferencias",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "preferencias"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test('moneda', () => pm.expect(r.monedaVisualizacion).to.eql('UYU'));",
+              "pm.test('el limite vuelve como numero', () => pm.expect(r.limiteAlertaUsd).to.eql(5000));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "36 - Preferencias: cambiar solo el limite conserva la moneda",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"limiteAlertaUsd\": 7500\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/preferencias",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "preferencias"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test('moneda intacta', () => pm.expect(r.monedaVisualizacion).to.eql('UYU'));",
+              "pm.test('limite nuevo', () => pm.expect(r.limiteAlertaUsd).to.eql(7500));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "37 - Error 400: preferencias invalidas",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"monedaVisualizacion\": \"DOLAR\",\n  \"limiteAlertaUsd\": -1\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/preferencias",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "preferencias"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+              "pm.test('informa los dos errores', () => pm.expect(pm.response.json().error.detalles).to.have.lengthOf(2));"
             ]
           }
         }

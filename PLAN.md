@@ -6,7 +6,7 @@ El plan de las Partes 3 y 4 (ya en `main`) está archivado en [PLAN-PARTES-3-4.m
 
 - [x] Sesiones 0 a 7 — Partes 3 y 4 (en `main`, commit `3297718`)
 - [x] Sesión 8 — Planificación de las Partes 5 a 8
-- [ ] Sesión 9 — Redis: infraestructura, caché, preferencias y ranking
+- [x] Sesión 9 — Redis: infraestructura, caché, preferencias y ranking
 - [ ] Sesión 10 — BullMQ: cola de reportes, worker y cierre de la **Parte 5**
 - [ ] Sesión 11 — Auth0 y middleware JWT (JWKS)
 - [ ] Sesión 12 — RBAC, modo pánico y cierre de la **Parte 6**

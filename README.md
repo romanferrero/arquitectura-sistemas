@@ -1,11 +1,11 @@
 # API REST — Portafolio de Criptoactivos
 
 API REST para gestionar un portafolio de criptoactivos, con CRUD completo sobre
-persistencia en MySQL, integración con APIs externas (cotizaciones y tipo de cambio)
+persistencia en MySQL, caché y preferencias en Redis, integración con APIs externas (cotizaciones y tipo de cambio)
 y procesamiento con el patrón **Pipes & Filters**: un pipeline de ingesta para los activos
 nuevos y otro de análisis de riesgo para lotes.
 
-**Stack:** Node.js · Express 5 · TypeScript · Zod · Winston · Jest · Docker
+**Stack:** Node.js · Express 5 · TypeScript · Zod · Winston · Jest · MySQL · MongoDB · Redis · Docker
 
 ---
 
@@ -13,7 +13,7 @@ nuevos y otro de análisis de riesgo para lotes.
 
 - Node.js **22 o superior** (probado en v24.11). Se necesita esa versión para el flag
   nativo `--env-file` y para ejecutar archivos `.ts` sin compilar.
-- Docker con Compose v2 (`docker compose`), para levantar MySQL y MongoDB.
+- Docker con Compose v2 (`docker compose`), para levantar MySQL, MongoDB y Redis.
 
 ---
 
@@ -38,7 +38,7 @@ cp .env.example .env      # en Windows: copy .env.example .env
 | `npm run migrar` | Aplica las migraciones pendientes de MySQL |
 | `npm run migrar:deshacer` | Deshace la última migración aplicada |
 | `npm run migrar:estado` | Lista las migraciones aplicadas y las pendientes |
-| `npm run db:verificar` | Comprueba que MySQL y MongoDB respondan con la configuración del `.env` |
+| `npm run db:verificar` | Comprueba que MySQL, MongoDB y Redis respondan con la configuración del `.env` |
 
 Los comandos son, en realidad:
 
@@ -55,14 +55,16 @@ La API queda disponible en `http://localhost:3000`.
 
 ## Bases de datos
 
-El proyecto usa dos motores, cada uno para lo que mejor hace: **MySQL** (vía Sequelize) para
+El proyecto usa tres motores, cada uno para lo que mejor hace: **MySQL** (vía Sequelize) para
 la entidad `Activo`, que tiene estructura fija y reglas de integridad, y **MongoDB** (vía
-Mongoose) para la auditoría, que crece rápido y no necesita un esquema rígido.
+Mongoose) para la auditoría, que crece rápido y no necesita un esquema rígido, y **Redis**
+(cliente oficial `redis`) para la caché y las preferencias, que son datos chicos, de acceso
+frecuente y que tienen que responder al instante.
 
 ```bash
-docker compose up -d --wait mysql mongodb   # solo las bases: MySQL 8.4 y MongoDB 8.0, esperando a que estén healthy
+docker compose up -d --wait mysql mongodb redis   # solo las bases: MySQL 8.4, MongoDB 8.0 y Redis 7.4, esperando a que estén healthy
 npm run dev                                  # la API: conecta, migra y escucha (o npm run migrar a mano)
-npm run db:verificar                         # comprueba que la app llega a las dos bases
+npm run db:verificar                         # comprueba que la app llega a las tres bases
 
 # ...o todo, API incluida, dentro de Docker (ver la sección Docker):
 docker compose up -d --build --wait
@@ -143,6 +145,56 @@ filtra y `?limite=` acota (de 1 a 200, 50 por defecto). Un id que nunca existió
 > puede haber operaciones sin registro. Las consultas del historial, en cambio, responden 503 si
 > MongoDB no está. La solución completa sería un *Transactional Outbox* (ver mejoras).
 
+### Redis: caché, ranking y preferencias
+
+Redis (`redis:7.4-alpine`, con contraseña y persistencia AOF) cumple dos papeles distintos, y la
+diferencia importa para entender qué pasa cuando se cae:
+
+| Uso | Estructura | Si Redis falla |
+|---|---|---|
+| **Caché** de `GET /api/activos/:id` | String JSON con TTL (`SET ... EX`, `GET`) | Se **sigue sirviendo desde MySQL**: la caché es una optimización |
+| **Ranking** de activos más consultados | Sorted Set (`ZINCRBY`, `ZREM`) | Se ignora y se loguea |
+| **Preferencias** de la billetera | Hash (`HSET`, `HGETALL`) | **503**: acá Redis es la única copia, no hay nada que devolver |
+
+**Caché (cache-aside).** `GET /api/activos/:id` mira primero `activo:<id>`; si no está (`MISS`) lee
+de MySQL y lo guarda con el TTL de `CACHE_TTL_SEGUNDOS`; la próxima lectura sale de Redis
+(`HIT`). El header `X-Cache` lo informa. `PUT` y `DELETE` invalidan la clave después de que MySQL
+confirma. Solo la lectura pública por id usa la caché: actualizar, eliminar y calcular el
+rendimiento leen siempre de MySQL, que es la fuente de verdad.
+
+```bash
+curl -i http://localhost:3000/api/activos/<id>      # X-Cache: MISS
+curl -i http://localhost:3000/api/activos/<id>      # X-Cache: HIT
+docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ttl activo:<id>'
+```
+
+**Límite conocido.** Si Redis está caído cuando se hace un `PUT`, no se puede invalidar: al volver
+(con AOF sus datos persisten) la caché puede devolver el activo viejo **hasta que venza el TTL**.
+Se comprobó: con TTL de 60 s, un `GET` posterior devolvió `cantidad: 1` cuando MySQL ya tenía `3`, y
+se corrigió solo al vencer. También puede pasar, sin que Redis se caiga, si una lectura que ya leyó
+de MySQL guarda su resultado justo después de la invalidación. Por eso el TTL se mantiene corto; la
+Parte 7 (CQRS y Pub/Sub) revisa cómo sincronizar la caché.
+
+**Ranking.** Cada consulta por id suma uno en `activos:mas-consultados` y borrar un activo lo saca.
+
+**Preferencias.** `PUT /api/preferencias` actualiza solo los campos enviados
+(`monedaVisualizacion`: código de 3 letras, se guarda en mayúsculas; `limiteAlertaUsd`: número
+mayor a 0) y `GET` los devuelve; lo que no se configuró vuelve con el valor por defecto
+(`MONEDA` y `UMBRAL_MONTO_USD`). Por ahora hay una sola billetera (`preferencias:billetera`).
+
+**Conexión.** [`src/datos/redis.ts`](src/datos/redis.ts) sigue el ciclo de vida de la documentación
+oficial: `createClient()`, un oyente `on("error")` (sin él, un Redis caído tumbaría el proceso),
+`connect()` al arrancar y `quit()` al cerrar. Al arrancar no se reintenta: si Redis no está, la API
+no levanta (igual que con MySQL y MongoDB). Ya conectada, si se cae reintenta con espera creciente y
+mientras tanto los comandos fallan en el acto (`disableOfflineQueue`), así una caída de Redis no
+demora las respuestas.
+
+| Clave | Tipo | Contenido |
+|---|---|---|
+| `activo:<id>` | String + TTL | El activo en JSON |
+| `activos:mas-consultados` | Sorted Set | Id del activo → cantidad de consultas |
+| `preferencias:billetera` | Hash | `monedaVisualizacion`, `limiteAlertaUsd` |
+
 ---
 
 ## Docker
@@ -151,36 +203,37 @@ filtra y `?limite=` acota (de 1 a 200, 50 por defecto). Un id que nunca existió
 
 ```bash
 cp .env.example .env
-docker compose up -d --build --wait     # la API, MySQL y MongoDB
+docker compose up -d --build --wait     # la API, MySQL, MongoDB y Redis
 curl http://localhost:3000/salud
 ```
 
-`docker-compose.yml` levanta tres servicios y espera a que estén sanos:
+`docker-compose.yml` levanta cuatro servicios y espera a que estén sanos:
 
 | Servicio | Imagen | Notas |
 |---|---|---|
-| `api` | La del [`Dockerfile`](Dockerfile) (Node 24, multi-stage, usuario sin privilegios) | Arranca recién cuando MySQL y MongoDB están `healthy`; aplica las migraciones al iniciar |
+| `api` | La del [`Dockerfile`](Dockerfile) (Node 24, multi-stage, usuario sin privilegios) | Arranca recién cuando MySQL, MongoDB y Redis están `healthy`; aplica las migraciones al iniciar |
 | `mysql` | `mysql:8.4` | Datos en el volumen `mysql_data` |
 | `mongodb` | `mongo:8.0` | Datos en el volumen `mongodb_data` |
+| `redis` | `redis:7.4-alpine` | Con contraseña y AOF, datos en el volumen `redis_data`. La política `noeviction` hace que, con la memoria llena, rechace escrituras en vez de borrar claves en silencio (lo necesitará la cola de la Parte 5) |
 
-Los tres puertos se publican solo en `127.0.0.1`. La API recibe el mismo `.env` que usás en
+Los cuatro puertos se publican solo en `127.0.0.1`. La API recibe el mismo `.env` que usás en
 local, pero el compose **pisa** las variables que cambian dentro de la red de Docker: allí las
 bases no están en `localhost` sino bajo el nombre de su servicio (`MYSQL_HOST=mysql`,
-`MONGO_HOST=mongodb`) y se llega por el puerto interno (`3306`, `27017`), no por el que se
+`MONGO_HOST=mongodb`, `REDIS_HOST=redis`) y se llega por el puerto interno (`3306`, `27017`, `6379`), no por el que se
 publica al host.
 
 | Comando | Qué hace |
 |---|---|
 | `docker compose logs -f api` | Sigue los logs de la API |
-| `docker compose up -d --build --wait mysql mongodb` | Solo las bases (y la API con `npm run dev`) |
+| `docker compose up -d --wait mysql mongodb redis` | Solo las bases (y la API con `npm run dev`) |
 | `docker compose down` | Baja todo y **conserva** los datos |
-| `docker compose down -v` | Baja todo y **borra** los datos: el próximo arranque parte de cero |
+| `docker compose down -v` | Baja todo y **borra** los datos (incluida la caché): el próximo arranque parte de cero |
 
 ### La imagen sola
 
 ```bash
 docker build -t portafolio-cripto .
-docker run --rm -p 3000:3000 --env-file .env   -e MYSQL_HOST=host.docker.internal -e MONGO_HOST=host.docker.internal portafolio-cripto
+docker run --rm -p 3000:3000 --env-file .env   -e MYSQL_HOST=host.docker.internal -e MONGO_HOST=host.docker.internal -e REDIS_HOST=host.docker.internal portafolio-cripto
 ```
 
 Con el `.env` tal cual la API falla con `ECONNREFUSED`: dentro de un contenedor `localhost` es el
@@ -210,6 +263,9 @@ Se cargan con el flag **nativo** de Node `--env-file`, sin usar la librería `do
 | `MONGO_HOST`, `MONGO_PORT` | `localhost`, `27017` | Dónde está MongoDB |
 | `MONGO_DATABASE` | `crypto_db` | Base donde se guarda la auditoría |
 | `MONGO_INITDB_ROOT_USERNAME`, `MONGO_INITDB_ROOT_PASSWORD` | `mongo_root`, … | Usuario con el que se conecta la aplicación |
+| `REDIS_HOST`, `REDIS_PORT` | `localhost`, `6379` | Dónde está Redis |
+| `REDIS_PASSWORD` | — | Contraseña de Redis (la usa Docker Compose al crear el contenedor y la app al conectarse) |
+| `CACHE_TTL_SEGUNDOS` | `60` | Cuánto vive un activo en la caché antes de releerlo de MySQL |
 | `UMBRAL_MONTO_USD` | `100000` | Monto (en USD) que, superado, dispara la *Whale Alert*. Admite 0 |
 | `UMBRAL_VOLATILIDAD` | `80` | Volatilidad (en %) que, superada, marca un activo como `high_risk` |
 
@@ -224,7 +280,7 @@ Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 |---|---|---|---|---|
 | GET | `/salud` | Health check | 200 | — |
 | GET | `/api/activos` | Lista los activos (`?simbolo=BTC` filtra) | 200 | — |
-| GET | `/api/activos/:id` | Obtiene un activo | 200 | 404 |
+| GET | `/api/activos/:id` | Obtiene un activo (con caché: header `X-Cache: HIT` o `MISS`) | 200 | 404 |
 | POST | `/api/activos` | Crea un activo | 201 | 400, 409, 502 |
 | PUT | `/api/activos/:id` | Reemplaza un activo | 200 | 400, 404, 409, 502 |
 | DELETE | `/api/activos/:id` | Elimina un activo | 204 | 404 |
@@ -233,6 +289,8 @@ Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 | GET | `/api/auditoria` | Historial general (`?operacion=`, `?limite=`) | 200 | 400, 503 |
 | GET | `/api/activos/:id/precio` | Activo + cotización + rendimiento | 200 | 404, 502 |
 | GET | `/api/precios/:simbolo` | Cotización de un símbolo suelto | 200 | 400, 404, 502 |
+| GET | `/api/preferencias` | Preferencias de la billetera (Redis) | 200 | 503 |
+| PUT | `/api/preferencias` | Cambia las preferencias enviadas (`monedaVisualizacion`, `limiteAlertaUsd`) | 200 | 400, 503 |
 
 ### Códigos HTTP
 
@@ -245,7 +303,7 @@ Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 | 404 | Id inexistente, ruta inexistente, o símbolo sin cotización disponible |
 | 409 | Ya existe un activo con ese símbolo |
 | 502 | La API externa de precios o de tipo de cambio falló (timeout, red, respuesta inesperada) |
-| 503 | MongoDB no responde y se pidió el historial de auditoría |
+| 503 | MongoDB no responde y se pidió el historial de auditoría, o Redis no responde y se pidieron las preferencias |
 | 500 | Error no controlado |
 
 ### Formato de error
@@ -462,6 +520,7 @@ src/
 │   ├── auditoriaRepositorio.ts    # historial de auditoría sobre MongoDB (Mongoose)
 │   ├── mapeoAuditoria.ts          # documento de MongoDB -> RegistroAuditoria (función pura)
 │   ├── conexiones.ts              # conexión a MySQL (Sequelize) y MongoDB (Mongoose)
+│   ├── redis.ts, tiposRedis.ts    # cliente de Redis con su ciclo de vida y los comandos que usan los servicios
 │   ├── modelos/activoModelo.ts    # modelo Sequelize de la tabla activos
 │   ├── migraciones/               # cambios de esquema versionados (up / down)
 │   └── migrar.ts, migrarCli.ts    # ejecutor de migraciones (Umzug) y su comando
@@ -475,9 +534,12 @@ src/
 │   ├── analisisServicio.ts        # usa el pipeline de análisis
 │   ├── crearServicioAuditoria.ts  # registrar (mejor esfuerzo) y consultar el historial
 │   ├── auditoriaServicio.ts       # esa fábrica ya conectada a MongoDB y al logger
+│   ├── crearCacheActivos.ts       # caché cache-aside (String + TTL) y ranking (Sorted Set), de mejor esfuerzo
+│   ├── cacheActivosServicio.ts    # esa fábrica ya conectada a Redis
+│   ├── crearServicioPreferencias.ts, preferenciasServicio.ts   # preferencias (Hash de Redis)
 │   ├── preciosServicio.ts         # llamada a CoinGecko
 │   └── tasasServicio.ts           # llamada a la API de tipo de cambio
-├── controladores/                 # activosControlador.ts y auditoriaControlador.ts
+├── controladores/                 # activos, auditoría y preferencias
 ├── rutas/activosRutas.ts
 ├── errores/ErrorApi.ts
 ├── utilidades/                    # redondear.ts, camposModificados.ts
@@ -496,6 +558,8 @@ Flujo de una petición:
 Cliente → rutas → controlador → servicio → pipeline de ingesta → repositorio → MySQL
                                     │            └──→ tasasServicio → API de tipo de cambio
                                     │            └──→ auditoría → MongoDB (mejor esfuerzo)
+                                    │            └──→ caché → Redis (GET por id; mejor esfuerzo)
+                                    ├────→ preferencias → Redis
                                     ├────→ pipeline de análisis (lote → reporte)
                                     └────→ preciosServicio → CoinGecko
 
@@ -515,7 +579,7 @@ Cualquier throw de ErrorApi → manejadorErrores → { "error": { ... } }
 1. Levantar la API (`npm run dev`).
 2. En Postman: **Import** → seleccionar
    [`postman/portafolio-cripto.postman_collection.json`](postman/portafolio-cripto.postman_collection.json).
-3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 27 de
+3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 38 de
    una sola vez.
 
 La colección trae dos variables: `baseUrl` (`http://localhost:3000`) e `idActivo`, que se
@@ -599,6 +663,12 @@ curl http://localhost:3000/api/ruta-inexistente                           # 404
 | Tiempo máximo de 2 s para registrar | Con MongoDB caído, el driver tardaría 5 s en rendirse en cada escritura; así la demora es acotada. |
 | El historial se lee antes de borrar y sin tocar MySQL | El `ELIMINAR` guarda cómo era el activo; la consulta funciona aunque ya no exista. |
 | Consultas de historial con MongoDB caído → 503 | No es un bug de la API (500) sino un servicio del que depende que no está disponible. |
+| La caché es de mejor esfuerzo; las preferencias no | La caché es una copia: si Redis falla se sirve desde MySQL y solo se loguea. Las preferencias solo existen en Redis, así que sin él no hay qué devolver: 503. |
+| `disableOfflineQueue` en el cliente de Redis | Con Redis caído, los comandos fallan en el acto en lugar de quedar encolados: una caída no demora las respuestas (un `GET` con Redis caído respondió en 6 ms). |
+| Un TTL como red de seguridad | Si una invalidación se pierde (Redis caído en el `PUT`), el dato viejo vive como máximo `CACHE_TTL_SEGUNDOS`. |
+| Solo la lectura pública por id usa la caché | Actualizar y eliminar deciden con el dato real de MySQL; no pueden apoyarse en una copia que puede estar desactualizada. |
+| Redis con `noeviction` y AOF | Con la memoria llena rechaza escrituras en vez de borrar claves sin avisar (lo exige la cola de la Parte 5), y los datos sobreviven a un reinicio. |
+| La contraseña de Redis no queda en `docker inspect` | Se pasa por variable de entorno y la expande el shell del contenedor, en vez de interpolarse en el comando. |
 | Migraciones al arrancar la API | Cómodo con una sola instancia. Con varias arrancando a la vez convendría un paso de migración aparte. |
 | 409 por símbolo duplicado | El portafolio tiene una única posición por activo. |
 | 404 vs 502 en precios | 404 si el símbolo no está soportado (no se llega a llamar a CoinGecko); 502 solo si CoinGecko falla de verdad, porque el error es de un servicio upstream y no nuestro. |
@@ -620,7 +690,8 @@ sin compilar en desarrollo y compilado en producción:
 
 ### Fuera de alcance (posibles mejoras)
 
-- Caché en memoria de ~60 s para las cotizaciones, y así no golpear el *rate limit*
+- Invalidación robusta de la caché de activos: hoy depende del TTL si Redis está caído durante un `PUT` o un `DELETE`.
+- Caché de ~60 s para las cotizaciones (en Redis, ahora que está disponible), y así no golpear el *rate limit*
   gratuito de CoinGecko.
 - Resolver los símbolos vía `/coins/list` en vez del mapa fijo (se evitó porque descarga
   unas 15.000 monedas solo para traducir un identificador).

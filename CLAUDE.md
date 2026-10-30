@@ -35,10 +35,10 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
 | `npm run check` | Tipos de `src/` y `pruebas/`, sin emitir |
 | `npm test` | Jest en modo ESM |
 | `npm run build` | Compila a `dist/` |
-| `docker compose up -d --build --wait` | Levanta la API, MySQL y MongoDB (Docker Desktop tiene que estar prendido) |
-| `docker compose up -d --wait mysql mongodb` | Solo las bases (la API con `npm run dev`) |
+| `docker compose up -d --build --wait` | Levanta la API, MySQL, MongoDB y Redis (Docker Desktop tiene que estar prendido) |
+| `docker compose up -d --wait mysql mongodb redis` | Solo las bases (la API con `npm run dev`) |
 | `npm run migrar` / `migrar:deshacer` / `migrar:estado` | Migraciones de MySQL |
-| `npm run db:verificar` | Comprueba que la app llegue a las dos bases |
+| `npm run db:verificar` | Comprueba que la app llegue a las tres bases |
 
 ## Convenciones
 
@@ -58,4 +58,7 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
   Una migración ya aplicada no se edita: se agrega una nueva.
 - En esta máquina hay un MongoDB instalado en Windows que ocupa el puerto 27017: el `.env`
   local usa `MONGO_PORT=27018` para el contenedor. `.env.example` conserva 27017.
+- Redis (`src/datos/redis.ts`): la caché es de mejor esfuerzo (si falla se sirve desde MySQL, solo se loguea);
+  las preferencias no (503). Los servicios reciben los comandos por parámetro (`ComandosRedis`) y los tests usan
+  `pruebas/ayudas/redisFalso.ts`. Las variables `REDIS_*` se leen con la función `redisUrl()`, no con `env`.
 - Tests en `pruebas/`, importando `describe`/`test`/`expect` desde `@jest/globals`.

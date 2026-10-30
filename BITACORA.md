@@ -22,7 +22,7 @@ usó ninguna skill.
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
 correr la colección de Postman, **Docker Compose**, **Jest** y pruebas de mutación hechas a mano.
 
-Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7 y
+Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9 y
 las revisiones). Esfuerzo alto en todo, salvo la sesión 8 (planificación de las Partes 5 a 8), que fue extra alto.
 
 ---
@@ -620,3 +620,65 @@ merge a `main` y mensaje al profesor. Modelos sugeridos: Sonnet 5.5 para las ses
 - Antes de la sesión 11: crear la cuenta de Auth0 (el paso a paso se guía en esa sesión). El profesor va a necesitar
   credenciales de prueba para ejercitar la API a mano.
 - La memoria de Claude queda al día en `PLAN.md`; no se agregó nada nuevo.
+
+---
+
+## Sesión 9 — Redis: infraestructura, caché, preferencias y ranking · 2026-10-30
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (lo indicó el estudiante al empezar). El plan sugería Sonnet 5.5 para
+  esta sesión.
+- **Modo:** implementación, en `feature/sesion-9-redis-cache`.
+- **Herramientas:** edición de archivos, `npm install redis`, Docker Compose, `redis-cli` dentro del contenedor, `curl`,
+  Newman (vía `npx`) y pruebas de mutación a mano. Sin skills ni subagentes.
+
+**Qué se hizo**
+- [docker-compose.yml](docker-compose.yml): servicio `redis` (7.4-alpine) con contraseña, AOF, `noeviction`, healthcheck
+  autenticado, puerto solo en `127.0.0.1` y volumen. La API espera a que esté `healthy` y recibe `REDIS_HOST=redis`.
+- Variables `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` y `CACHE_TTL_SEGUNDOS`; `redisUrl()` y `cacheTtlSegundos()` en
+  `config/env.ts` (funciones, como `mongoUri()`, para que `migrar` no las exija).
+- [src/datos/redis.ts](src/datos/redis.ts): cliente oficial con el ciclo de vida de la letra (`on('error')`, `connect()` al
+  arrancar, `quit()` al cerrar). `servidor.ts` y `db:verificar` lo usan.
+- [src/servicios/crearCacheActivos.ts](src/servicios/crearCacheActivos.ts): caché cache-aside (String + TTL) y ranking de
+  consultas (Sorted Set). `GET /api/activos/:id` informa `X-Cache: HIT | MISS`; `PUT` y `DELETE` invalidan.
+- [src/servicios/crearServicioPreferencias.ts](src/servicios/crearServicioPreferencias.ts): `GET` y `PUT /api/preferencias`
+  sobre un Hash (`HSET` / `HGETALL`), validadas con Zod.
+- Tests con un Redis falso en memoria ([pruebas/ayudas/redisFalso.ts](pruebas/ayudas/redisFalso.ts)), 11 requests nuevos en
+  Postman y README con la sección de Redis.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| La caché es de **mejor esfuerzo** (Redis caído → se sirve de MySQL); las preferencias dan **503** | Claude | La caché es una copia; las preferencias solo existen en Redis y no hay nada que devolver |
+| Solo la lectura pública por id usa la caché | Claude | Actualizar y eliminar deciden con el dato real de MySQL |
+| `disableOfflineQueue` y no reintentar al arrancar | Claude | Con Redis caído los comandos fallan en el acto (un `GET` respondió en 6 ms) y la API no levanta sin Redis, igual que con las otras bases |
+| `cerrarRedis()` aparte de `cerrarConexiones()` (**cambia el plan**, que decía sumarlo a esta) | Claude | `conexiones.ts` lo importa `migrar`, que no debe exigir las variables de Redis |
+| La lógica cache-aside vive en la fábrica (`consultar`) y no en `activosServicio` | Claude | Así se prueba sin Redis real; hubo que moverla después de ver que quedaba sin test |
+| `PUT /api/preferencias` actualiza solo los campos enviados | Claude | Con un Hash tiene sentido tocar un campo sin pisar el otro. Una sola billetera por ahora; por usuario en la Parte 6 |
+| Los requests de Postman se agregan en esta sesión, no al cerrar la Parte 5 | Claude | Se pueden verificar ya, y cada sesión deja la colección en verde |
+| `describirError` muestra el código de un `AggregateError` | Claude | El error de Redis sin servidor decía solo "AggregateError"; ahora dice `ECONNREFUSED` |
+
+**Hallazgo: la invalidación se puede perder.** Con Redis caído, un `PUT` no puede invalidar la clave; al volver Redis (los
+datos persisten por AOF) un `GET` devolvió `cantidad: 1` cuando MySQL ya tenía `3`, hasta que venció el TTL de 60 s. Es el
+costo de una caché de mejor esfuerzo, y la razón de mantener un TTL corto. Queda documentado en el README; la Parte 7 (CQRS y
+Pub/Sub) vuelve sobre cómo sincronizar la caché.
+
+**Verificación**
+- `npm run check` y `npm run build` sin errores; `npm test`: 17 suites, **187 tests** en verde (29 nuevos).
+- Mutaciones (3): no guardar el activo tras un MISS, guardarlo sin TTL y no validar el id leído de la caché → las 3 detectadas.
+- Redis real: `MISS` y luego `HIT` con `TTL` descontando; el `PUT` borra la clave y la siguiente lectura es `MISS` con el
+  dato nuevo; el `DELETE` borra la clave y saca el id del ranking; un id inexistente da 404 y no deja rastro en Redis.
+- Preferencias: valores por defecto, `PUT` completo y parcial, `HGETALL` coincide, y un cuerpo inválido da 400 con los dos errores.
+- **Redis detenido con la API corriendo:** `GET` por id → 200 (desde MySQL), preferencias → 503, `POST` → 201 y `PUT` → 200.
+  Al volver Redis, la API se reconectó sola.
+- Arranque con Redis detenido: `db:verificar` falla en 2,8 s con "No se pudo conectar a Redis".
+- Newman, dos corridas seguidas, tanto con la API local como con la API **dentro de Docker**: 81 aserciones, 0 fallas.
+- Compose: los cuatro servicios `healthy`; Redis exige contraseña (`NOAUTH` sin ella) y la contraseña no aparece en
+  `docker inspect`; `docker compose stop api` (SIGTERM real) cierra con código 0.
+
+**Pendientes / a tener en cuenta**
+- El arranque desde cero (`docker compose down -v`) no se repitió en esta sesión: no se tocó nada de MySQL y Mongo, y Redis
+  no tiene una fase de inicialización como esas.
+- Los contenedores quedan corriendo al cerrar la sesión.
+- Siguiente: sesión 10 (BullMQ: cola de reportes y worker), que cierra la Parte 5.
+
