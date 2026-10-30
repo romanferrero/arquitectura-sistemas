@@ -5,3 +5,6 @@ dist
 
 # Material del curso (letras y ejemplos del profesor): se usa en local, no se publica
 Contextos/
+
+# Entorno de Postman con las credenciales reales de Auth0 (el .ejemplo si se versiona)
+postman/entorno-local.postman_environment.json
