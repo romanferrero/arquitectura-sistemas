@@ -75,6 +75,68 @@ describe("crearCacheActivos", () => {
     expect(await cache.leer("id-btc")).toBeUndefined();
   });
 
+  describe("consultar (cache-aside)", () => {
+    test("la primera lectura va al origen (MISS) y la guarda; la segunda sale de la caché (HIT)", async () => {
+      const { cache, ttl } = armar();
+      let lecturasDelOrigen = 0;
+      const cargar = async (): Promise<Activo> => {
+        lecturasDelOrigen += 1;
+        return bitcoin;
+      };
+
+      const primera = await cache.consultar("id-btc", cargar);
+      const segunda = await cache.consultar("id-btc", cargar);
+
+      expect(primera).toEqual({ activo: bitcoin, cache: "MISS" });
+      expect(segunda).toEqual({ activo: bitcoin, cache: "HIT" });
+      expect(lecturasDelOrigen).toBe(1);
+      expect(ttl.get("activo:id-btc")).toBe(60);
+    });
+
+    test("cuenta cada consulta en el ranking, sea HIT o MISS", async () => {
+      const { cache, rankings } = armar();
+
+      await cache.consultar("id-btc", async () => bitcoin);
+      await cache.consultar("id-btc", async () => bitcoin);
+      await cache.consultar("id-btc", async () => bitcoin);
+
+      expect(rankings.get(CLAVE_RANKING)?.get("id-btc")).toBe(3);
+    });
+
+    test("si el origen falla (404) el error sigue de largo y no se guarda ni se cuenta nada", async () => {
+      const { cache, textos, rankings } = armar();
+
+      await expect(
+        cache.consultar("id-btc", async () => {
+          throw new Error("no existe");
+        }),
+      ).rejects.toThrow("no existe");
+
+      expect(textos.size).toBe(0);
+      expect(rankings.size).toBe(0);
+    });
+
+    test("tras invalidar, la siguiente lectura vuelve al origen", async () => {
+      const { cache } = armar();
+      await cache.consultar("id-btc", async () => bitcoin);
+      await cache.invalidar("id-btc");
+
+      const nueva = await cache.consultar("id-btc", async () => ({ ...bitcoin, cantidad: 2 }));
+
+      expect(nueva.cache).toBe("MISS");
+      expect(nueva.activo.cantidad).toBe(2);
+    });
+
+    test("con Redis caído lee del origen igual y no falla", async () => {
+      const { cache, estado } = armar();
+      estado.caido = true;
+
+      const resultado = await cache.consultar("id-btc", async () => bitcoin);
+
+      expect(resultado).toEqual({ activo: bitcoin, cache: "MISS" });
+    });
+  });
+
   describe("con Redis caído", () => {
     test("ningún método rechaza: la caché falla en silencio y deja el error en el log", async () => {
       const { cache, estado, lineas } = armar();

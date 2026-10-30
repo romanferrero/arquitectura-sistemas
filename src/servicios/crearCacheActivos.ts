@@ -39,41 +39,65 @@ export function crearCacheActivos(dependencias: {
     }
   }
 
-  return {
-    /** El activo guardado, o undefined si no esta en la cache (o Redis no responde). */
-    async leer(id: string): Promise<Activo | undefined> {
-      const texto = await intentar(`No se pudo leer ${PREFIJO_ACTIVO}${id}`, () => redis.get(PREFIJO_ACTIVO + id), null);
-      if (texto === null) return undefined;
+  /** El activo guardado, o undefined si no esta en la cache (o Redis no responde). */
+  async function leer(id: string): Promise<Activo | undefined> {
+    const texto = await intentar(`No se pudo leer ${PREFIJO_ACTIVO}${id}`, () => redis.get(PREFIJO_ACTIVO + id), null);
+    if (texto === null) return undefined;
 
-      try {
-        const dato: unknown = JSON.parse(texto);
-        if (typeof dato === "object" && dato !== null && (dato as { id?: unknown }).id === id) {
-          return dato as Activo;
-        }
-      } catch {
-        // cae al aviso de abajo
+    try {
+      const dato: unknown = JSON.parse(texto);
+      if (typeof dato === "object" && dato !== null && (dato as { id?: unknown }).id === id) {
+        return dato as Activo;
       }
-      registrador.error(`Dato inválido en la caché (${PREFIJO_ACTIVO}${id}): se lee de MySQL`);
-      return undefined;
-    },
+    } catch {
+      // cae al aviso de abajo
+    }
+    registrador.error(`Dato inválido en la caché (${PREFIJO_ACTIVO}${id}): se lee de MySQL`);
+    return undefined;
+  }
 
-    /** Guarda el activo con TTL: pasado ese tiempo se vuelve a leer de MySQL. */
-    async guardar(activo: Activo): Promise<void> {
-      await intentar(
-        `No se pudo guardar ${PREFIJO_ACTIVO}${activo.id}`,
-        () => redis.set(PREFIJO_ACTIVO + activo.id, JSON.stringify(activo), { EX: ttlSegundos }),
-        undefined,
-      );
+  /** Guarda el activo con TTL: pasado ese tiempo se vuelve a leer de MySQL. */
+  async function guardar(activo: Activo): Promise<void> {
+    await intentar(
+      `No se pudo guardar ${PREFIJO_ACTIVO}${activo.id}`,
+      () => redis.set(PREFIJO_ACTIVO + activo.id, JSON.stringify(activo), { EX: ttlSegundos }),
+      undefined,
+    );
+  }
+
+  /** Suma una consulta al ranking de activos mas consultados (ZINCRBY, atomico). */
+  async function contarConsulta(id: string): Promise<void> {
+    await intentar("No se pudo actualizar el ranking", () => redis.zIncrBy(CLAVE_RANKING, 1, id), 0);
+  }
+
+  return {
+    leer,
+    guardar,
+    contarConsulta,
+
+    /**
+     * Lectura con cache (cache-aside): primero Redis; si el activo no esta, `cargar` lo lee de
+     * la fuente de verdad (MySQL) y se guarda con TTL. Devuelve tambien si salio de la cache.
+     *
+     * Si `cargar` lanza (por ejemplo un 404), el error sigue de largo: lo inexistente no se
+     * guarda ni se cuenta en el ranking.
+     */
+    async consultar(id: string, cargar: () => Promise<Activo>): Promise<{ activo: Activo; cache: "HIT" | "MISS" }> {
+      const enCache = await leer(id);
+      if (enCache !== undefined) {
+        await contarConsulta(id);
+        return { activo: enCache, cache: "HIT" };
+      }
+
+      const activo = await cargar();
+      await guardar(activo);
+      await contarConsulta(id);
+      return { activo, cache: "MISS" };
     },
 
     /** Saca el activo de la cache (despues de un PUT o un DELETE confirmado en MySQL). */
     async invalidar(id: string): Promise<void> {
       await intentar(`No se pudo invalidar ${PREFIJO_ACTIVO}${id}`, () => redis.del(PREFIJO_ACTIVO + id), 0);
-    },
-
-    /** Suma una consulta al ranking de activos mas consultados (ZINCRBY, atomico). */
-    async contarConsulta(id: string): Promise<void> {
-      await intentar("No se pudo actualizar el ranking", () => redis.zIncrBy(CLAVE_RANKING, 1, id), 0);
     },
 
     /** Saca el activo del ranking (cuando se elimina). */

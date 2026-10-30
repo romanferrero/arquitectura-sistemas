@@ -49,16 +49,7 @@ export async function obtenerActivo(id: string): Promise<Activo> {
  * Si Redis falla, la cache lo absorbe y esto se comporta como una lectura normal de MySQL.
  */
 export async function consultarActivo(id: string): Promise<{ activo: Activo; cache: "HIT" | "MISS" }> {
-  const enCache = await cacheActivos.leer(id);
-  if (enCache !== undefined) {
-    await cacheActivos.contarConsulta(id);
-    return { activo: enCache, cache: "HIT" };
-  }
-
-  const activo = await obtenerActivo(id); // 404 si no existe: lo inexistente no se cuenta ni se guarda
-  await cacheActivos.guardar(activo);
-  await cacheActivos.contarConsulta(id);
-  return { activo, cache: "MISS" };
+  return await cacheActivos.consultar(id, () => obtenerActivo(id)); // 404 si no existe
 }
 
 // Campos del activo que el cliente puede cambiar; sirven para decir que se modifico.
