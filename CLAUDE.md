@@ -1,11 +1,11 @@
 # portafolio-cripto
 
 API REST de un portafolio de criptoactivos (Node 24 · Express 5 · TypeScript 7), ejercicio
-del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.md](PLAN.md).
+del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.md](PLAN.md) (Partes 5 a 8; el plan de las Partes 3 y 4 está archivado en `PLAN-PARTES-3-4.md`).
 
 ## Cómo se trabaja
 
-- Las letras del curso y los ejemplos del profesor están en `Contextos/`.
+- Las letras del curso y los ejemplos del profesor están en `Contextos/` (PDF de las Partes 3 a 8, `crypto-databases-ejemplo/`, `Ejemplo-pub-sub/` y `pm2-lab/`).
 - Al empezar una sesión: leer `PLAN.md` (sección Estado) y la última entrada de `BITACORA.md`.
 - Al cerrar una sesión: marcar el avance en `PLAN.md` y agregar una entrada en
   `BITACORA.md` (modelo, esfuerzo, modo, skills, decisiones y quién las tomó, verificación).

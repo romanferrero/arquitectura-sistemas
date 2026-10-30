@@ -2,7 +2,8 @@
 
 Registro de cómo se trabaja el ejercicio entre el estudiante y Claude Code: qué modelo y
 esfuerzo se usó en cada sesión, qué se decidió, quién lo decidió y cómo se verificó.
-El plan completo está en [PLAN.md](PLAN.md).
+El plan vigente (Partes 5 a 8) está en [PLAN.md](PLAN.md); el de las Partes 3 y 4, ya terminado, en
+[PLAN-PARTES-3-4.md](PLAN-PARTES-3-4.md).
 
 ## Resumen: skills y herramientas usadas
 
@@ -21,8 +22,8 @@ usó ninguna skill.
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
 correr la colección de Postman, **Docker Compose**, **Jest** y pruebas de mutación hechas a mano.
 
-Los modelos usados: Opus 5.5 en la planificación (sesión 0) y Sonnet 5.5 en la implementación (sesiones 1 a 7 y las
-revisiones), siempre con esfuerzo alto.
+Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7 y
+las revisiones). Esfuerzo alto en todo, salvo la sesión 8 (planificación de las Partes 5 a 8), que fue extra alto.
 
 ---
 
@@ -573,3 +574,49 @@ ninguna variable de Mongo; parámetros repetidos → 400; tres señales seguidas
 
 **Fuera del alcance de esa revisión** (anotado como mejora en `RESPUESTAS-PARTE-4.md`): la API no tiene autenticación (ya
 era así y afecta a todos los endpoints) y la aplicación se conecta a MongoDB con el usuario root.
+
+---
+
+## Sesión 8 — Planificación de las Partes 5 a 8 · 2026-10-30
+
+- **Modelo / esfuerzo:** Opus 5.5 · esfuerzo **extra alto** (lo indicó el estudiante al pedir el plan).
+- **Modo:** plan (solo lectura). Al aprobarse el plan, el cierre documental (este archivo, `PLAN.md`, `CLAUDE.md`) se
+  hizo ya fuera del modo plan, en `feature/sesion-8-plan-partes-5-8`.
+- **Herramientas:** lectura de las cuatro letras (PDF) y de los dos ejemplos nuevos, del código actual y de la
+  bitácora; consultas de solo lectura (versiones de librerías en npm, puertos libres, núcleos y RAM, estado de Docker).
+  Preguntas de decisión al estudiante. **Sin subagentes ni skills.**
+- **Qué se leyó:** `Contextos/` con las Partes 5, 6, 7 y 8; `Ejemplo-pub-sub/` (API y dos suscriptores Redis en
+  contenedores separados) y `pm2-lab/` (PM2 en cluster dentro de Docker y k6); y el código de `src/`, `docker-compose.yml`,
+  `Dockerfile` y `package.json` tal como quedaron tras la Parte 4.
+
+**Hallazgos**
+- El PDF de la Parte 7 tiene el título "Parte 6": es un error de la letra, el contenido es CQRS y Pub/Sub.
+- La letra de la Parte 6 dice "etapa final", pero después vienen la 7 y la 8.
+- **Bull está en modo mantenimiento** (última versión en diciembre de 2024); sus autores recomiendan BullMQ.
+- La máquina tiene 16 núcleos y 7,8 GB de RAM: `instances: "max"` crearía 16 procesos y puede no entrar en memoria.
+- Docker Desktop estaba apagado.
+- `PLAN.md` decía que faltaba el merge de la Parte 4 a `main`, pero ya estaba hecho.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| Identidad con **Auth0** (opción B de la letra) | Estudiante | Es la recomendada y la primera de la lista. La API valida la firma con JWKS; los tests firman con claves propias, sin red |
+| **BullMQ** en lugar de Bull | Estudiante, a propuesta de Claude | Bull ya no se desarrolla; los conceptos (cola, worker, `completed`/`failed`) son los mismos. Se documenta el cambio |
+| Nombres en español, con tabla "letra → proyecto" en el README | Estudiante | Misma convención que en la Parte 3 (`/assets/analyze` → `/api/activos/analizar`) |
+| Una parte por vez, cada una cerrada en `main` antes de empezar la siguiente | Estudiante | Mismo flujo que las Partes 3 y 4 |
+| Worker y suscriptores como **procesos aparte** (misma imagen, otro comando) | Claude | Es el molde de los ejemplos y permite el cluster de la Parte 8 sin multiplicar el trabajo |
+| Limpiar la caché con `SCAN` + `DEL` sobre `activo:*`, nunca `FLUSHALL` | Claude | `FLUSHALL` borraría jobs, preferencias y contadores |
+| El modo pánico falla cerrado: si Redis no responde, se bloquean las escrituras | Claude | Ante la duda, no se escribe |
+| Se hacen los tres bonus (contador atómico, modo pánico, Whale Alert y reto) | Claude, a confirmar | Cada uno entra en la parte que le corresponde |
+| `GET /salud` se amplía en lugar de crear `/health` | Claude | Ya existe y lo usa el healthcheck de Docker |
+
+**Resultado:** ocho sesiones nuevas (9 a 16), dos por parte; cada parte cierra con tests, `/code-review`, prueba manual,
+merge a `main` y mensaje al profesor. Modelos sugeridos: Sonnet 5.5 para las sesiones 9, 10, 12, 13 y 16; Opus 5.5 para la 11
+(seguridad y configuración externa), la 14 (consistencia asíncrona) y la 15 (cluster, señales y Docker).
+
+**Pendientes**
+- Antes de la sesión 9: prender Docker Desktop.
+- Antes de la sesión 11: crear la cuenta de Auth0 (el paso a paso se guía en esa sesión). El profesor va a necesitar
+  credenciales de prueba para ejercitar la API a mano.
+- La memoria de Claude queda al día en `PLAN.md`; no se agregó nada nuevo.
