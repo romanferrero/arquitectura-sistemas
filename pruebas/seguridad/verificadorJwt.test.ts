@@ -283,6 +283,20 @@ describe("crearVerificadorJwt · el proveedor de identidad no responde (503)", (
     expect(lineas[0]).toContain("fetch failed");
   });
 
+  test("un error que NO viene de pedir la clave ni del token es un bug nuestro: no se disfraza de 503 ni de 401", async () => {
+    // La "clave" que devuelve el proveedor no es una clave: jose se queja con un TypeError propio, no con un error de token.
+    const { verificar, lineas } = armar((async () => "esto no es una clave") as unknown as JWTVerifyGetKey);
+
+    const error = await verificar(await firmar()).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(ErrorApi); // sale como 500, con su stack en el log del manejador de errores
+    expect(lineas).toEqual([]); // y no se loguea como "el proveedor no responde"
+  });
+
   test("con las claves caídas, un token roto igual da 401 si se puede saber antes de pedirlas", async () => {
     // "basura" ni siquiera es un JWT: se rechaza al leerlo, sin llegar a buscar la clave.
     const { verificar } = armar(async () => {
