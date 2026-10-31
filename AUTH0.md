@@ -4,10 +4,10 @@ La API **no** guarda usuarios ni contraseñas: delega la autenticación en un pr
 (**Auth0**, opción B de la letra de la Parte 6). Auth0 emite los JWT y la API solo los **verifica** con
 las claves públicas (JWKS) del proveedor. Esta guía deja Auth0 listo en unos 15 minutos.
 
-> **Aviso:** los nombres de los menús son los del panel de Auth0 al escribir esto y pueden cambiar. Los
-> pasos se escribieron sin poder probarlos contra una cuenta real: si algo no coincide, el objetivo de
-> cada paso está explicado para poder encontrarlo. El código que verifica los tokens sí se probó (con
-> claves y un proveedor local de prueba, ver el final).
+> **Estado:** esta guía se probó el 2026-10-31 con una cuenta real de Auth0 (tenant gratuito): los tres usuarios
+> obtienen su token con el rol correcto y la API los acepta. El único paso que faltaba en la primera versión es el
+> **6.5** (autorizar la aplicación en la API). Los nombres de los menús son los del panel al escribir esto y pueden
+> cambiar: el objetivo de cada paso está explicado para poder encontrarlo.
 
 Qué se necesita al terminar: un **tenant**, una **API** (con su *identifier*), tres **roles**, tres
 **usuarios**, una **Action** que pone los roles en el token y una **aplicación** para pedir tokens de prueba.
@@ -83,6 +83,9 @@ Para probar sin armar un front, se pide el token con usuario y contraseña (*Res
 3. Copiá el **Client ID** (no hace falta ningún secreto con una aplicación Native).
 4. **Settings (del tenant) → General → API Authorization Settings → Default Directory** = `Username-Password-Authentication`
    y guardá. Sin esto el pedido con contraseña falla.
+5. **Autorizá la aplicación para usar la API** (sin esto Auth0 responde `Client "..." is not authorized to access resource
+   server`): **Applications → APIs → Portafolio Cripto API → pestaña Application Access**, buscá tu aplicación y en
+   **User Access** elegí **Authorized** (sin permisos/*scopes*). También se puede desde la aplicación, pestaña **APIs**.
 
 > Esto es **solo para desarrollo**. En una aplicación real el usuario inicia sesión en una página de Auth0
 > (flujo *Authorization Code + PKCE*) y nunca entrega su contraseña a la aplicación.
