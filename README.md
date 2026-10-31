@@ -1,7 +1,7 @@
 # API REST — Portafolio de Criptoactivos
 
 API REST para gestionar un portafolio de criptoactivos, con CRUD completo sobre
-persistencia en MySQL, caché y preferencias en Redis, reportes asíncronos con una cola (BullMQ), autenticación con JWT (Auth0), integración con APIs externas (cotizaciones y tipo de cambio)
+persistencia en MySQL, caché y preferencias en Redis, reportes asíncronos con una cola (BullMQ), autenticación con JWT (Auth0) y control de acceso por roles, integración con APIs externas (cotizaciones y tipo de cambio)
 y procesamiento con el patrón **Pipes & Filters**: un pipeline de ingesta para los activos
 nuevos y otro de análisis de riesgo para lotes.
 
@@ -157,7 +157,7 @@ diferencia importa para entender qué pasa cuando se cae:
 |---|---|---|
 | **Caché** de `GET /api/activos/:id` | String JSON con TTL (`SET ... EX`, `GET`) | Se **sigue sirviendo desde MySQL**: la caché es una optimización |
 | **Ranking** de activos más consultados | Sorted Set (`ZINCRBY`, `ZREM`) | Se ignora y se loguea |
-| **Preferencias** de la billetera | Hash (`HSET`, `HGETALL`) | **503**: acá Redis es la única copia, no hay nada que devolver |
+| **Preferencias** de cada usuario | Hash (`HSET`, `HGETALL`) | **503**: acá Redis es la única copia, no hay nada que devolver |
 
 **Caché (cache-aside).** `GET /api/activos/:id` mira primero `activo:<id>`; si no está (`MISS`) lee
 de MySQL y lo guarda con el TTL de `CACHE_TTL_SEGUNDOS`; la próxima lectura sale de Redis
@@ -183,7 +183,7 @@ Parte 7 (CQRS y Pub/Sub) revisa cómo sincronizar la caché.
 **Preferencias.** `PUT /api/preferencias` actualiza solo los campos enviados
 (`monedaVisualizacion`: código de 3 letras, se guarda en mayúsculas; `limiteAlertaUsd`: número
 mayor a 0) y `GET` los devuelve; lo que no se configuró vuelve con el valor por defecto
-(`MONEDA` y `UMBRAL_MONTO_USD`). Por ahora hay una sola billetera (`preferencias:billetera`).
+(`MONEDA` y `UMBRAL_MONTO_USD`). Cada usuario tiene las suyas (`preferencias:<sub del token>`): lo que guarda uno no lo ve ni lo cambia otro.
 
 **Conexión.** [`src/datos/redis.ts`](src/datos/redis.ts) sigue el ciclo de vida de la documentación
 oficial: `createClient()`, un oyente `on("error")` (sin él, un Redis caído tumbaría el proceso),
@@ -196,7 +196,8 @@ demora las respuestas.
 |---|---|---|
 | `activo:<id>` | String + TTL | El activo en JSON |
 | `activos:mas-consultados` | Sorted Set | Id del activo → cantidad de consultas |
-| `preferencias:billetera` | Hash | `monedaVisualizacion`, `limiteAlertaUsd` |
+| `preferencias:<sub>` | Hash | `monedaVisualizacion`, `limiteAlertaUsd` de ese usuario |
+| `modo_panico` | String | `"true"` mientras el modo pánico está activo (ver *Roles y modo pánico*) |
 
 ### Reportes asíncronos: cola (BullMQ) y worker
 
@@ -380,8 +381,8 @@ bajó responde 503.
 
 **Roles.** Los roles (`AUDITOR`, `TRADER`, `ADMIN`) viajan **dentro del token**, en un claim propio
 (`AUTH_CLAIM_ROLES`, con Auth0 `https://portafolio-cripto/roles`) que agrega una *Action* de Auth0. El middleware los
-lee, descarta los que no conoce y los deja en la petición junto con el `sub` (`GET /api/yo` los muestra). Este paso es
-solo **autenticación**: qué puede hacer cada rol (autorización) llega en la sesión siguiente.
+lee, descarta los que no conoce y los deja en la petición junto con el `sub` (`GET /api/yo` los muestra). Qué puede hacer
+cada rol lo decide la **autorización**, en la sección siguiente.
 
 **Variables:** `AUTH_ISSUER`, `AUTH_AUDIENCE`, `AUTH_JWKS_URL` y `AUTH_CLAIM_ROLES`. La app no sabe que es Auth0: para cambiar
 de proveedor (Keycloak, Clerk, Supabase...) se cambian estas variables.
@@ -389,6 +390,49 @@ de proveedor (Keycloak, Clerk, Supabase...) se cambian estas variables.
 **Probar sin cuenta de Auth0.** `npm run idp:falso` levanta un proveedor de identidad falso en `localhost:4000` (publica
 sus claves y emite tokens para los tres roles). Es una herramienta de desarrollo, fuera de `src/` y de la imagen de Docker.
 Ver el final de [AUTH0.md](AUTH0.md).
+
+---
+
+## Roles y modo pánico
+
+La autenticación responde *quién sos* (401 si no se sabe); la **autorización** responde *qué podés hacer* (**403** si se
+sabe quién es pero no tiene permiso). Los tres roles (RBAC) vienen dentro del token y cada ruta declara cuál exige
+([`src/rutas/activosRutas.ts`](src/rutas/activosRutas.ts), matriz en [`src/seguridad/permisos.ts`](src/seguridad/permisos.ts)):
+
+| Operación | AUDITOR | TRADER | ADMIN |
+|---|:-:|:-:|:-:|
+| Leer: activos, precios, historial de un activo, preferencias | ✔ | ✔ | ✔ |
+| `GET /api/auditoria` (historial general) | ✔ | ✘ | ✔ |
+| Crear, modificar y borrar activos; cambiar preferencias | ✘ | ✔ | ✔ |
+| `POST /api/activos/analizar` (calcula, no guarda) | ✘ | ✔ | ✔ |
+| Reportes, estadísticas, limpiar la caché y modo pánico | ✘ | ✘ | ✔ |
+
+Un usuario autenticado **sin ningún rol** recibe 403 en todo menos en `GET /api/yo`. **Un test falla** si se agrega una ruta
+sin permiso o con uno distinto del de esta tabla ([`pruebas/rutas/permisosDeRutas.test.ts`](pruebas/rutas/permisosDeRutas.test.ts)).
+Cada acceso denegado queda en el log (quién, con qué roles, qué intentó).
+
+**Modo pánico (distribuido).** Un interruptor de emergencia: un ADMIN lo activa durante un incidente y, mientras esté activo,
+**todas las escrituras** de TRADER y AUDITOR dan **403** (el ADMIN nunca se bloquea: tiene que poder operar y apagarlo). Las
+lecturas y `analizar` (que no escribe) siguen funcionando.
+
+```bash
+curl -X PUT http://localhost:3000/api/admin/modo-panico -H "Authorization: Bearer <token ADMIN>" \
+     -H "Content-Type: application/json" -d '{"activo": true}'        # SET modo_panico true
+curl http://localhost:3000/api/admin/modo-panico -H "Authorization: Bearer <token ADMIN>"   # {"modoPanico": true}
+```
+
+- **Vive en Redis, no en la memoria del proceso:** cuando la API corra en varias instancias (cluster, Parte 8), una variable en
+  memoria cambiaría solo en la instancia que recibió el pedido; en Redis lo ven todas al instante, sin reiniciar nada.
+- **Falla cerrado:** si no se puede leer el interruptor (Redis caído), las escrituras de quien no es ADMIN dan **503** en vez de
+  dejarse pasar. Ante la duda, durante un incidente, no se escribe. Verificado con Redis detenido.
+- Quién lo activa o apaga, y cada escritura bloqueada, quedan en el log.
+
+**Limpiar la caché** (`DELETE /api/admin/cache`, solo ADMIN) borra **únicamente** las entradas `activo:*`, recorriendo Redis con
+`SCAN` por tandas. Nunca `FLUSHALL`/`FLUSHDB`: Redis también guarda los trabajos de la cola, las preferencias de cada usuario, el
+contador de reportes, el ranking y el propio modo pánico, y borrarlos en pleno incidente sería peor que el problema.
+Verificado: después de limpiar, las claves `bull:*`, `preferencias:*`, `estadisticas:*` y el ranking siguen intactas.
+
+**Quién hizo qué.** La auditoría del CRUD y la de los reportes guardan el `sub` del usuario en `metadatos.usuario`.
 
 ---
 
@@ -411,13 +455,13 @@ La letra usa nombres en inglés; el proyecto mantiene todo en español (como en 
 
 ## Endpoints
 
-Todos los de `/api` requieren `Authorization: Bearer <token>` y pueden responder **401** (sin token, inválido o vencido) o **503**
+Todos los de `/api` requieren `Authorization: Bearer <token>` y un **rol** que lo permita (ver *Roles y modo pánico*; los de la tabla marcados con **ADMIN** son solo de ese rol). Pueden responder **401** (sin token, inválido o vencido) o **503**
 (si no se pueden verificar los tokens porque el proveedor de identidad no responde). `/salud` es público.
 
 | Método | Ruta | Descripción | Éxito | Errores |
 |---|---|---|---|---|
 | GET | `/salud` | Health check (**público**, sin token) | 200 | — |
-| GET | `/api/yo` | Quién es el usuario del token y qué roles tiene | 200 | 401 |
+| GET | `/api/yo` | Quién es el usuario del token y qué roles tiene (cualquier usuario autenticado) | 200 | 401 |
 | GET | `/api/activos` | Lista los activos (`?simbolo=BTC` filtra) | 200 | — |
 | GET | `/api/activos/:id` | Obtiene un activo (con caché: header `X-Cache: HIT` o `MISS`) | 200 | 404 |
 | POST | `/api/activos` | Crea un activo | 201 | 400, 409, 502 |
@@ -430,9 +474,12 @@ Todos los de `/api` requieren `Authorization: Bearer <token>` y pueden responder
 | GET | `/api/precios/:simbolo` | Cotización de un símbolo suelto | 200 | 400, 404, 502 |
 | POST | `/api/activos/reporte` | Pide el Reporte de Valoración Masiva: se encola y responde enseguida (header `Location`) | 202 | 503 |
 | GET | `/api/reportes/:id` | Estado y progreso de un reporte, y su resultado cuando termina | 200 | 404, 503 |
+| DELETE | `/api/admin/cache` | Vacía la caché de activos (solo `activo:*`). **ADMIN** | 200 | 403, 503 |
+| GET | `/api/admin/modo-panico` | Estado del modo pánico. **ADMIN** | 200 | 403, 503 |
+| PUT | `/api/admin/modo-panico` | Activa o apaga el modo pánico (`{"activo": true}`). **ADMIN** | 200 | 400, 403, 503 |
 | GET | `/api/estadisticas` | Reportes exitosos y los 5 activos más consultados (Redis) | 200 | 503 |
-| GET | `/api/preferencias` | Preferencias de la billetera (Redis) | 200 | 503 |
-| PUT | `/api/preferencias` | Cambia las preferencias enviadas (`monedaVisualizacion`, `limiteAlertaUsd`) | 200 | 400, 503 |
+| GET | `/api/preferencias` | Las preferencias del usuario del token (Redis) | 200 | 403, 503 |
+| PUT | `/api/preferencias` | Cambia las preferencias del usuario enviadas (`monedaVisualizacion`, `limiteAlertaUsd`) | 200 | 400, 503 |
 
 ### Códigos HTTP
 
@@ -442,12 +489,13 @@ Todos los de `/api` requieren `Authorization: Bearer <token>` y pueden responder
 | 201 | POST exitoso (incluye header `Location`) |
 | 202 | El pedido de reporte quedó en la cola; el reporte todavía no existe (incluye `Location`) |
 | 204 | DELETE exitoso (sin cuerpo) |
+| 403 | El usuario está autenticado pero su rol no permite la operación, o el modo pánico está activo y es una escritura |
 | 401 | Falta el token, es inválido o está vencido (incluye `WWW-Authenticate`) |
 | 400 | Datos inválidos, JSON malformado, símbolo con formato inválido |
 | 404 | Id inexistente, ruta inexistente, o símbolo sin cotización disponible |
 | 409 | Ya existe un activo con ese símbolo |
 | 502 | La API externa de precios o de tipo de cambio falló (timeout, red, respuesta inesperada) |
-| 503 | No se pudo verificar el token (el proveedor de identidad no responde); MongoDB no responde y se pidió el historial de auditoría, o Redis no responde y se pidieron las preferencias, las estadísticas o un reporte (la cola vive en Redis) |
+| 503 | No se pudo consultar el modo pánico (Redis caído): las escrituras de quien no es ADMIN se rechazan; no se pudo verificar el token (el proveedor de identidad no responde); MongoDB no responde y se pidió el historial de auditoría, o Redis no responde y se pidieron las preferencias, las estadísticas o un reporte (la cola vive en Redis) |
 | 500 | Error no controlado |
 
 ### Formato de error
@@ -668,7 +716,7 @@ src/
 │   ├── modelos/activoModelo.ts    # modelo Sequelize de la tabla activos
 │   ├── migraciones/               # cambios de esquema versionados (up / down)
 │   └── migrar.ts, migrarCli.ts    # ejecutor de migraciones (Umzug) y su comando
-├── seguridad/                     # verificadorJwt (jose, JWKS), autenticacion (cableado), usuarioActual
+├── seguridad/                     # verificadorJwt (jose, JWKS), autenticacion, autorizar (roles), modoPanico, permisos (la matriz), usuarioActual
 ├── colas/colaReportes.ts          # la cola de BullMQ vista desde la API (productor)
 ├── reportes/                      # generarReporte, procesadorReporte, eventosWorker, estadoReporte (sin Redis ni bases: dependencias por parámetro)
 ├── procesos/workerReportes.ts     # punto de entrada del worker (proceso aparte)
@@ -732,7 +780,7 @@ Cualquier throw de ErrorApi → manejadorErrores → { "error": { ... } }
 1. Levantar la API (`npm run dev`).
 2. En Postman: **Import** → seleccionar
    [`postman/portafolio-cripto.postman_collection.json`](postman/portafolio-cripto.postman_collection.json).
-3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 50 de
+3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 70 de
    una sola vez. Los tres primeros (`T1` a `T3`) piden los tokens al proveedor de identidad: hace falta un **entorno**
    (`postman/entorno-local.postman_environment.json.ejemplo` para Auth0, o `postman/entorno-idp-falso.postman_environment.json`
    para el proveedor falso). Ver [AUTH0.md](AUTH0.md). Los requests del reporte necesitan el worker corriendo (`npm run worker` o el compose).
@@ -826,6 +874,12 @@ curl http://localhost:3000/api/ruta-inexistente                           # 404
 | Solo la lectura pública por id usa la caché | Actualizar y eliminar deciden con el dato real de MySQL; no pueden apoyarse en una copia que puede estar desactualizada. |
 | Redis con `noeviction` y AOF | Con la memoria llena rechaza escrituras en vez de borrar claves sin avisar (lo exige la cola de la Parte 5), y los datos sobreviven a un reinicio. |
 | La contraseña de Redis no queda en `docker inspect` | Se pasa por variable de entorno y la expande el shell del contenedor, en vez de interpolarse en el comando. |
+| La matriz de permisos se declara en cada ruta y un test la verifica | Una ruta nueva sin permiso quedaría abierta a cualquier usuario autenticado sin que nadie lo note; el test falla en ese caso. |
+| 403 y no 404 para lo que el rol no permite | No se oculta que el recurso existe: el usuario está autenticado y la API es de uso interno; un 404 confundiría al cliente legítimo. |
+| El ADMIN no se bloquea nunca en modo pánico | Tiene que poder operar y apagar el modo; si no, un incidente lo dejaría sin salida. |
+| El modo pánico falla cerrado | Si no se puede leer el interruptor se rechazan las escrituras (503): ante la duda, durante un incidente, no se escribe. |
+| Limpiar la caché con `SCAN` + borrado de `activo:*`, nunca `FLUSHALL` | Redis guarda también la cola, las preferencias, los contadores y el modo pánico; vaciarlo todo en un incidente los perdería. |
+| Preferencias por usuario (`preferencias:<sub>`), con el `sub` del token | Nadie puede leer ni cambiar las de otro: el id sale del token verificado, nunca del pedido. |
 | Autenticación delegada en un proveedor de identidad (Auth0) y la API solo verifica | La API no maneja contraseñas ni sesiones; el token es *stateless*, así que sirve igual con una instancia que con diez (Parte 8). |
 | Algoritmo fijo (`RS256`) y `iss`/`aud`/`exp` obligatorios | Sin la lista cerrada de algoritmos, `alg: none` o la confusión HS256/RS256 podrían pasar. |
 | Los roles se leen de un claim configurable, y los desconocidos se descartan | No se ata la app a un proveedor ni se confía en roles inventados. |
@@ -864,7 +918,8 @@ sin compilar en desarrollo y compilado en producción:
   worker cae justo en ese momento y se podría duplicar si un trabajo se reprocesa. Un `SADD` por id de reporte lo haría idempotente.
 - Si Redis responde lento (más de 2 s) al pedir un reporte, la API da 503 pero el pedido puede quedar encolado igual: un reintento
   del cliente generaría dos reportes (con Redis caído no pasa). Se resolvería con una clave de idempotencia enviada por el cliente.
-- Autenticación para `POST /api/activos/reporte`: es la operación más cara de la API y hoy cualquiera puede pedirla (Parte 6).
+- Rate limiting (limitar cuántos pedidos por minuto puede hacer cada usuario o IP): hoy un usuario con permiso puede saturar la API o la cola de reportes.
+- Registrar en MongoDB (y no solo en el log) quién activó el modo pánico y quién limpió la caché.
 - Deduplicar pedidos de reporte repetidos y respetar el `Retry-After` de CoinGecko al reintentar.
 - Invalidación robusta de la caché de activos: hoy depende del TTL si Redis está caído durante un `PUT` o un `DELETE`.
 - Caché de ~60 s para las cotizaciones (en Redis, ahora que está disponible), y así no golpear el *rate limit*
