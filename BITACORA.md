@@ -830,8 +830,17 @@ mitad de un reporte lo termina y sale con código 0.
   reiniciarse: es el comportamiento normal de la caché y no ocurre con Auth0, que rota sus claves con `kid` distinto.
 
 **Pendientes**
-- **El estudiante tiene que crear la cuenta de Auth0 siguiendo [AUTH0.md](AUTH0.md) y probar con ella.** La guía se escribió de memoria del
-  panel de Auth0 y **no se pudo probar contra una cuenta real**: los pasos pueden tener diferencias menores. El código se verificó con un
-  proveedor local equivalente, no contra Auth0.
-- Mientras no se complete el `.env` con Auth0, la API arranca pero responde 503 a todo lo que lleve token.
+- ~~El estudiante tiene que crear la cuenta de Auth0 y probar con ella.~~ **Hecho el 2026-10-31** (ver abajo): el estudiante creó el tenant
+  `dev-td5pv7bdpswwexhr` (región US) y la API se probó contra Auth0 real.
 - Siguiente: sesión 12 (roles y autorización, modo pánico y cierre de la Parte 6).
+
+**Verificación con Auth0 real · 2026-10-31**
+- El estudiante creó la cuenta y el tenant y pasó el Client ID de la aplicación Native; Claude completó el `.env` (`AUTH_ISSUER` y
+  `AUTH_JWKS_URL`, comprobados contra `/.well-known/openid-configuration`) y armó el entorno de Postman (fuera de git). La contraseña de
+  los usuarios la escribió el estudiante en el archivo, nunca se la pasó a Claude ni se muestra en ningún informe.
+- **Hallazgo:** el primer pedido de token falló con `Client "..." is not authorized to access resource server`. Faltaba **autorizar la
+  aplicación en la API** (pestaña *Application Access*). La guía lo tenía solo en la tabla de problemas; se agregó como paso 6.5.
+- Resultado: los tres usuarios obtienen su token con el rol correcto (`["AUDITOR"]`, `["TRADER"]`, `["ADMIN"]`), `iss` y `aud` coinciden (la
+  audiencia llega como lista `[api, userinfo]`, que el verificador ya aceptaba) y **Newman con Auth0 real da 111 aserciones, 0 fallas** con la
+  API en Docker: `GET /api/yo` → 200 y los casos de 401 (sin token, inválido y manipulado) → 401.
+- Docker Desktop se apagó otra vez por un reinicio de la compu; Claude lo prendió.
