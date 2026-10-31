@@ -55,15 +55,15 @@ export async function consultarActivo(id: string): Promise<{ activo: Activo; cac
 // Campos del activo que el cliente puede cambiar; sirven para decir que se modifico.
 const CAMPOS_EDITABLES = ["simbolo", "nombre", "cantidad", "precioCompra"] as const;
 
-/** Lo que va a `metadatos` en el registro de auditoria: origen y, si hubo, la conversion de moneda. */
-function metadatosDe(conversion: ConversionMoneda | undefined): Record<string, unknown> {
+/** Lo que va a `metadatos` en el registro de auditoria: origen, QUIEN lo hizo y, si hubo, la conversion de moneda. */
+function metadatosDe(usuario: string, conversion: ConversionMoneda | undefined): Record<string, unknown> {
   return conversion === undefined
-    ? { origen: "API" }
-    : { origen: "API", conversionMoneda: conversion };
+    ? { origen: "API", usuario }
+    : { origen: "API", usuario, conversionMoneda: conversion };
 }
 
 // Es async porque el pipeline puede consultar la API de tasas de cambio.
-export async function crearActivo(cuerpo: unknown): Promise<Activo> {
+export async function crearActivo(cuerpo: unknown, usuario: string): Promise<Activo> {
   const { datos, conversion } = await pipelineIngesta.ejecutar(cuerpo); // 400 / 502 si falla un filtro
 
   // Regla de negocio: una sola posicion por simbolo en el portafolio. La hace
@@ -90,12 +90,12 @@ export async function crearActivo(cuerpo: unknown): Promise<Activo> {
     operacion: "CREAR",
     entidadId: creado.id,
     despues: creado,
-    metadatos: metadatosDe(conversion),
+    metadatos: metadatosDe(usuario, conversion),
   });
   return creado;
 }
 
-export async function actualizarActivo(id: string, cuerpo: unknown): Promise<Activo> {
+export async function actualizarActivo(id: string, cuerpo: unknown, usuario: string): Promise<Activo> {
   const actual = await obtenerActivo(id); // 404 enseguida si no existe, sin gastar el pipeline
 
   const { datos, conversion } = await pipelineIngesta.ejecutar(cuerpo); // 400 / 502 si falla un filtro
@@ -133,12 +133,12 @@ export async function actualizarActivo(id: string, cuerpo: unknown): Promise<Act
     antes,
     despues,
     camposModificados: camposModificados(antes, despues, CAMPOS_EDITABLES),
-    metadatos: metadatosDe(conversion),
+    metadatos: metadatosDe(usuario, conversion),
   });
   return despues;
 }
 
-export async function eliminarActivo(id: string): Promise<void> {
+export async function eliminarActivo(id: string, usuario: string): Promise<void> {
   // Se lee antes de borrar: el historial tiene que guardar como era el activo.
   const actual = await obtenerActivo(id);
   if (!(await repositorio.eliminar(id))) {
@@ -146,7 +146,7 @@ export async function eliminarActivo(id: string): Promise<void> {
   }
   await cacheActivos.invalidar(id);
   await cacheActivos.quitarDelRanking(id);
-  await auditoria.registrar({ operacion: "ELIMINAR", entidadId: id, antes: actual, metadatos: { origen: "API" } });
+  await auditoria.registrar({ operacion: "ELIMINAR", entidadId: id, antes: actual, metadatos: { origen: "API", usuario } });
 }
 
 /**

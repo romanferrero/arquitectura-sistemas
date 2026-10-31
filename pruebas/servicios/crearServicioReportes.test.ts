@@ -37,13 +37,13 @@ async function errorDe(promesa: Promise<unknown>): Promise<ErrorApi> {
   throw new Error("Se esperaba un ErrorApi y no hubo error");
 }
 
-const datos: DatosReporte = { idReporte: ID, solicitadoEn: "2026-10-30T12:00:00.000Z" };
+const datos: DatosReporte = { idReporte: ID, solicitadoEn: "2026-10-30T12:00:00.000Z", solicitadoPor: "auth0|admin" };
 
 describe("crearServicioReportes · solicitar", () => {
   test("deja el pedido en la cola y devuelve el id con estado en_cola, sin generar nada", async () => {
     const { servicio, agregados } = armar();
 
-    expect(await servicio.solicitar()).toEqual({ idReporte: ID, estado: "en_cola" });
+    expect(await servicio.solicitar("auth0|admin")).toEqual({ idReporte: ID, estado: "en_cola" });
     expect(agregados).toEqual([datos]);
   });
 
@@ -54,7 +54,7 @@ describe("crearServicioReportes · solicitar", () => {
       },
     });
 
-    const error = await errorDe(servicio.solicitar());
+    const error = await errorDe(servicio.solicitar("auth0|admin"));
 
     expect(error.estado).toBe(503);
     expect(lineas[0]).toContain("[ERROR] Reportes: No se pudo usar la cola de reportes");
@@ -63,7 +63,7 @@ describe("crearServicioReportes · solicitar", () => {
   test("si la cola no responde a tiempo da 503 en lugar de quedar colgada", async () => {
     const { servicio } = armar({ agregar: () => new Promise(() => undefined) }, 20);
 
-    const error = await errorDe(servicio.solicitar());
+    const error = await errorDe(servicio.solicitar("auth0|admin"));
 
     expect(error.estado).toBe(503);
   });
@@ -79,6 +79,7 @@ describe("crearServicioReportes · consultar", () => {
       estado: "en_cola",
       progreso: 0,
       solicitadoEn: datos.solicitadoEn,
+      solicitadoPor: "auth0|admin",
       intentos: 0,
     });
   });

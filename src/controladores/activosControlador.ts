@@ -5,6 +5,7 @@ import { obtenerPrecio } from "../servicios/preciosServicio.ts";
 import { ErrorApi } from "../errores/ErrorApi.ts";
 import { validarSimbolo } from "../validaciones/activoValidacion.ts";
 import { env } from "../config/env.ts";
+import { usuarioDe } from "../seguridad/usuarioActual.ts";
 
 /**
  * Los controladores solo traducen entre HTTP y el servicio: leen params/body,
@@ -31,18 +32,18 @@ export async function obtener(req: Request<{ id: string }>, res: Response): Prom
 
 // POST /api/activos
 export async function crear(req: Request, res: Response): Promise<void> {
-  const activo = await servicio.crearActivo(req.body);
+  const activo = await servicio.crearActivo(req.body, usuarioDe(res).sub);
   res.status(201).location(`/api/activos/${activo.id}`).json(activo);
 }
 
 // PUT /api/activos/:id
 export async function actualizar(req: Request<{ id: string }>, res: Response): Promise<void> {
-  res.status(200).json(await servicio.actualizarActivo(req.params.id, req.body));
+  res.status(200).json(await servicio.actualizarActivo(req.params.id, req.body, usuarioDe(res).sub));
 }
 
 // DELETE /api/activos/:id
 export async function eliminar(req: Request<{ id: string }>, res: Response): Promise<void> {
-  await servicio.eliminarActivo(req.params.id);
+  await servicio.eliminarActivo(req.params.id, usuarioDe(res).sub);
   res.status(204).send(); // 204 no lleva cuerpo
 }
 
