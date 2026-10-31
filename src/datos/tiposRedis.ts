@@ -7,9 +7,15 @@
  */
 export type ComandosRedis = {
   get(clave: string): Promise<string | null>;
+  /**
+   * Recorre las claves por tandas (SCAN): devuelve las de esta tanda y el cursor para pedir la siguiente;
+   * el cursor "0" significa que ya se recorrio todo. A diferencia de KEYS, no bloquea Redis.
+   */
+  scan(cursor: string, opciones: { MATCH: string; COUNT: number }): Promise<{ cursor: string; keys: string[] }>;
   /** `EX` es el TTL en segundos. */
   set(clave: string, valor: string, opciones?: { EX: number }): Promise<unknown>;
-  del(clave: string): Promise<number>;
+  /** Borra una o varias claves y dice cuantas existian. */
+  del(clave: string | string[]): Promise<number>;
   /** Suma uno de forma atomica y devuelve el nuevo valor (si la clave no existe, arranca en 0). */
   incr(clave: string): Promise<number>;
   zIncrBy(clave: string, incremento: number, miembro: string): Promise<number>;

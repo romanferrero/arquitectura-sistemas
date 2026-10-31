@@ -73,4 +73,9 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
   `AUTH_*` se leen con `authConfig()`. El verificador y el middleware son fábricas (la clave entra por parámetro) y se
   prueban con claves generadas al momento, sin red. `herramientas/idpFalso.ts` es solo desarrollo y no entra en la imagen.
   Con `pm.sendRequest` en Postman hay que mandar el token a mano: no hereda la autenticación de la colección.
+- Autorización (Parte 6): cada ruta de `src/rutas/activosRutas.ts` declara su permiso (`puedeLeer`, `puedeAuditar`, `puedeOperar`,
+  `puedeEscribir`, `soloAdmin`; la matriz está en `src/seguridad/permisos.ts` y en el README). `pruebas/rutas/permisosDeRutas.test.ts`
+  falla si se agrega una ruta sin permiso: **toda ruta nueva tiene que figurar en esa tabla**. Las rutas que escriben llevan
+  `...puedeEscribir` (rol + modo pánico). El modo pánico vive en Redis (`modo_panico`) y falla cerrado. El `sub` del usuario va
+  a `metadatos.usuario` de la auditoría; las preferencias son por usuario. Limpiar la caché borra solo `activo:*`, nunca `FLUSHALL`.
 - Tests en `pruebas/`, importando `describe`/`test`/`expect` desde `@jest/globals`.

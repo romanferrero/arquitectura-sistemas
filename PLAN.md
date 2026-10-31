@@ -9,7 +9,7 @@ El plan de las Partes 3 y 4 (ya en `main`) está archivado en [PLAN-PARTES-3-4.m
 - [x] Sesión 9 — Redis: infraestructura, caché, preferencias y ranking
 - [x] Sesión 10 — BullMQ: cola de reportes, worker (falta el cierre de la **Parte 5**: revisión y merge a `main`)
 - [x] Sesión 11 — Auth0 y middleware JWT (JWKS) (probada con Auth0 real el 2026-10-31)
-- [ ] Sesión 12 — RBAC, modo pánico y cierre de la **Parte 6**
+- [x] Sesión 12 — RBAC y modo pánico (falta el cierre de la **Parte 6**: revisión y merge a `main`)
 - [ ] Sesión 13 — CQRS: comandos, consultas y publicación de eventos
 - [ ] Sesión 14 — Pub/Sub: suscriptores y cierre de la **Parte 7**
 - [ ] Sesión 15 — PM2 cluster, salud, cierre ordenado y monitor de reinicios

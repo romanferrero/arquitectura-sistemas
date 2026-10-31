@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { usuarioDe } from "../seguridad/usuarioActual.ts";
 import { estadisticas } from "../servicios/estadisticasServicio.ts";
 import { reportes } from "../servicios/reportesServicio.ts";
 
@@ -9,7 +10,7 @@ import { reportes } from "../servicios/reportesServicio.ts";
 
 // POST /api/activos/reporte  -> 202: el pedido quedo en la cola, el reporte todavia no existe
 export async function solicitar(_req: Request, res: Response): Promise<void> {
-  const pedido = await reportes.solicitar();
+  const pedido = await reportes.solicitar(usuarioDe(res).sub);
   res
     .status(202)
     .location(`/api/reportes/${pedido.idReporte}`)

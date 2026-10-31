@@ -23,7 +23,7 @@ usó ninguna skill.
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
 correr la colección de Postman, **Docker Compose**, **Jest** y pruebas de mutación hechas a mano.
 
-Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9, 10, 11 y
+Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9, 10, 11, 12 y
 las revisiones). Esfuerzo alto en todo, salvo la sesión 8 (planificación de las Partes 5 a 8), que fue extra alto.
 
 ---
@@ -844,3 +844,61 @@ mitad de un reporte lo termina y sale con código 0.
   audiencia llega como lista `[api, userinfo]`, que el verificador ya aceptaba) y **Newman con Auth0 real da 111 aserciones, 0 fallas** con la
   API en Docker: `GET /api/yo` → 200 y los casos de 401 (sin token, inválido y manipulado) → 401.
 - Docker Desktop se apagó otra vez por un reinicio de la compu; Claude lo prendió.
+
+---
+
+## Sesión 12 — Roles, modo pánico y administración · 2026-10-31
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (igual que las sesiones 9 a 11; el plan sugería Sonnet 5.5 para esta).
+- **Modo:** implementación, en `feature/sesion-12-roles-modo-panico`.
+- **Herramientas:** edición de archivos, Docker Compose, `curl` con **tokens reales de Auth0**, Newman y mutaciones a mano. Sin skills ni
+  subagentes (la revisión de cierre va en la entrada siguiente). Docker Desktop estaba apagado y Claude lo prendió.
+
+**Qué se hizo**
+- **Autorización por roles (RBAC):** [src/seguridad/autorizar.ts](src/seguridad/autorizar.ts) (403, con log de cada acceso denegado) y la matriz
+  declarada en [src/seguridad/permisos.ts](src/seguridad/permisos.ts); cada ruta de [activosRutas.ts](src/rutas/activosRutas.ts) declara su permiso.
+- **Modo pánico:** [src/seguridad/modoPanico.ts](src/seguridad/modoPanico.ts), `SET modo_panico true` en Redis; bloquea las escrituras de
+  TRADER y AUDITOR con 403, no bloquea al ADMIN, y falla cerrado (503) si no puede leer Redis.
+- **Administración (solo ADMIN):** `DELETE /api/admin/cache` (`SCAN` + borrar solo `activo:*`) y `GET`/`PUT /api/admin/modo-panico`.
+- **Preferencias por usuario** (`preferencias:<sub>`) y el `sub` del usuario en `metadatos.usuario` de la auditoría del CRUD y de los reportes.
+- Un **test de contrato** ([pruebas/rutas/permisosDeRutas.test.ts](pruebas/rutas/permisosDeRutas.test.ts)) que falla si una ruta no declara su permiso o declara otro.
+- Postman: tokens por rol en los requests existentes, `T4` (apaga el modo pánico por si una corrida quedó a medias) y 19 casos nuevos de
+  permisos, modo pánico y preferencias por usuario. README y [RESPUESTAS-PARTE-6.md](RESPUESTAS-PARTE-6.md).
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| Matriz: el AUDITOR lee todo, **incluida** la auditoría general; el TRADER **no** ve la auditoría general ni las estadísticas | Claude, según el plan (a validar) | La letra dice que el AUDITOR consulta el historial; el TRADER "no accede a procesos administrativos" |
+| `POST /api/activos/analizar` solo para TRADER y ADMIN, y **no** se bloquea en modo pánico | Claude | Es un `POST` pero no guarda nada: la letra pide bloquear los endpoints de **escritura** |
+| El ADMIN nunca se bloquea en modo pánico, ni siquiera se consulta Redis para él | Claude | Tiene que poder operar y apagar el modo |
+| El modo pánico **falla cerrado** (503 si no se puede leer) | Claude | Ante la duda durante un incidente no se escribe |
+| Limpiar la caché borra solo `activo:*`, con `SCAN`; nunca `FLUSHALL` | Claude | Redis guarda también la cola, las preferencias, los contadores y el modo pánico |
+| 403 y no 404 para lo que el rol no permite | Claude | El usuario está autenticado; ocultar con 404 confundiría al cliente legítimo |
+| Un usuario autenticado sin roles recibe 403 en todo menos `/yo` | Claude | La autenticación dice *quién*; sin rol no tiene permiso para nada |
+| La clave `preferencias:billetera` quedó huérfana al pasar a preferencias por usuario | Claude | Eran datos de desarrollo; no se migraron |
+| Quién activó el modo pánico / limpió la caché va al **log**, no a MongoDB | Claude | Alcance de la sesión; queda como mejora |
+
+**Verificación**
+- `npm run check` y `npm test`: 30 suites, **385 tests** en verde (73 nuevos: autorización por rol, modo pánico, limpieza de caché, permisos de las
+  rutas y preferencias por usuario).
+- Mutaciones (6): autorización que deja pasar a todos, el ADMIN también se bloquea, el modo pánico falla **abierto**, limpiar la caché borra todo
+  Redis, `/estadisticas` abierta a todos y `DELETE` sin bloqueo de modo pánico → las 6 detectadas.
+- **Con tokens reales de Auth0 (los tres usuarios)**, matriz de 12 endpoints × 3 roles: **todas las celdas coinciden con lo esperado**. Sin token → 401.
+- **Modo pánico:** el TRADER recibe 403 en `POST`, `PUT`, `DELETE` y `PUT /preferencias`; `GET` y `analizar` siguen en 200; el ADMIN sigue escribiendo
+  (201); `redis-cli get modo_panico` da `true`; al apagarlo el TRADER vuelve a escribir.
+- **Con Redis detenido:** TRADER `POST` → 503 (no deja escribir), ADMIN `POST` → 201, TRADER `GET` → 200; al volver Redis se recupera solo.
+- **Preferencias por usuario:** el TRADER guarda UYU/777 y el ADMIN sigue viendo USD/100000; hay una clave por usuario.
+- **Limpiar la caché:** borró 1 entrada `activo:*` y dejó intactas las claves `preferencias:*` (3), `bull:*` (10), `estadisticas:*` (1) y el ranking.
+- **Auditoría:** los `CREAR` y `ACTUALIZAR` en MongoDB traen `metadatos.usuario` con el `sub` de quien los hizo.
+- Newman con **Auth0 real**, dos corridas: 70 requests, 147 y 146 aserciones, **0 fallas**.
+
+**Hallazgos**
+- Mi Redis falso recorría `SCAN` con un índice como cursor y se saltaba claves al borrar a mitad del recorrido (el `SCAN` real no lo hace). Lo
+  encontró un test y se corrigió el falso; no era un bug de la aplicación.
+- **Un token de Auth0 dura 24 horas** en este tenant: un cambio de rol o un bloqueo no se nota hasta que el token vence. Limitación documentada.
+- Git Bash convierte `/ruta` en una ruta de Windows con `MSYS_NO_PATHCONV` y rompe `-o /dev/null`: es un detalle de mis scripts de prueba.
+
+**Pendientes**
+- Cierre de la Parte 6: `/code-review` y `/security-review`, correcciones, OK del estudiante, merge a `main`.
+- A validar por el estudiante: la matriz de permisos (en especial que el TRADER no vea la auditoría general).
