@@ -9,6 +9,7 @@ export function crearRegistroEnMemoria() {
   const lineas: string[] = [];
   const registradorDe: FabricaRegistrador = (origen) => ({
     info: (mensaje) => lineas.push(`[INFO] ${origen}: ${mensaje}`),
+    warn: (mensaje) => lineas.push(`[WARN] ${origen}: ${mensaje}`),
     error: (mensaje) => lineas.push(`[ERROR] ${origen}: ${mensaje}`),
   });
   return { lineas, registradorDe };
@@ -17,5 +18,6 @@ export function crearRegistroEnMemoria() {
 /** Registrador que descarta todo, para los tests que no miran los logs. */
 export const registradorSilencioso: Registrador = {
   info: () => undefined,
+  warn: () => undefined,
   error: () => undefined,
 };

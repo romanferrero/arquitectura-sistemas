@@ -27,7 +27,7 @@ export function crearAutorizacion(registrador: Registrador) {
         next();
         return;
       }
-      registrador.info(
+      registrador.warn(
         `Acceso denegado: ${usuario.sub} (roles: ${usuario.roles.join(", ") || "ninguno"}) intentó ${req.method} ${req.path}`,
       );
       throw new ErrorApi(403, `No tiene permiso para esta operación. Roles necesarios: ${rolesPermitidos.join(", ")}`);
