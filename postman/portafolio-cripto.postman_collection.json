@@ -228,6 +228,54 @@
       ]
     },
     {
+      "name": "T4 - Seguridad: apagar el modo panico (por si una corrida anterior quedo a medias)",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenAdmin}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"activo\": false\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/admin/modo-panico",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "admin",
+            "modo-panico"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "00 - Limpiar el portafolio",
       "request": {
         "method": "GET",
@@ -882,6 +930,7 @@
     {
       "name": "24 - Listar la auditoria filtrando por ELIMINAR",
       "request": {
+        "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{tokenAuditor}}", "type": "string"}]},
         "method": "GET",
         "url": {
           "raw": "{{baseUrl}}/api/auditoria?operacion=ELIMINAR&limite=5",
@@ -922,6 +971,7 @@
     {
       "name": "25 - Error 400: parametros de auditoria invalidos",
       "request": {
+        "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{tokenAuditor}}", "type": "string"}]},
         "method": "GET",
         "url": {
           "raw": "{{baseUrl}}/api/auditoria?operacion=BORRAR&limite=0",
@@ -1360,6 +1410,7 @@
     {
       "name": "38 - Reporte: pedirlo (202, se genera en segundo plano)",
       "request": {
+        "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{tokenAdmin}}", "type": "string"}]},
         "method": "POST",
         "url": {
           "raw": "{{baseUrl}}/api/activos/reporte",
@@ -1393,6 +1444,7 @@
     {
       "name": "39 - Reporte: seguirlo hasta que termine (polling)",
       "request": {
+        "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{tokenAdmin}}", "type": "string"}]},
         "method": "GET",
         "url": {
           "raw": "{{baseUrl}}/api/reportes/{{idReporte}}",
@@ -1447,6 +1499,7 @@
     {
       "name": "40 - Estadisticas: reportes exitosos y activos mas consultados",
       "request": {
+        "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{tokenAdmin}}", "type": "string"}]},
         "method": "GET",
         "url": {
           "raw": "{{baseUrl}}/api/estadisticas",
@@ -1477,6 +1530,7 @@
     {
       "name": "41 - Error 404: reporte que no existe",
       "request": {
+        "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{tokenAdmin}}", "type": "string"}]},
         "method": "GET",
         "url": {
           "raw": "{{baseUrl}}/api/reportes/3f9d2c1e-8b7a-4c3d-9e1f-0a1b2c3d4e5f",
@@ -1505,6 +1559,7 @@
     {
       "name": "42 - Error 404: un id que no es un UUID no puede ser un reporte",
       "request": {
+        "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{tokenAdmin}}", "type": "string"}]},
         "method": "GET",
         "url": {
           "raw": "{{baseUrl}}/api/reportes/meta",
@@ -1668,6 +1723,814 @@
             "exec": [
               "pm.test('401 Unauthorized: la firma ya no coincide', () => pm.response.to.have.status(401));",
               "pm.test('Token invalido', () => pm.expect(pm.response.json().error.mensaje).to.eql('Token inválido'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "47 - Permisos: el AUDITOR puede leer",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenAuditor}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "48 - Permisos: el AUDITOR no puede crear",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenAuditor}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"simbolo\": \"DOGE\",\n  \"nombre\": \"Dogecoin\",\n  \"cantidad\": 10,\n  \"precioCompra\": 0.15\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/activos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 Forbidden: el usuario esta autenticado pero no tiene permiso', () => pm.response.to.have.status(403));",
+              "pm.test('dice que roles hacian falta', () => pm.expect(pm.response.json().error.mensaje).to.include('Roles necesarios'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "49 - Permisos: el AUDITOR no puede borrar",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenAuditor}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "DELETE",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/cualquier-id",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos",
+            "cualquier-id"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 Forbidden: el usuario esta autenticado pero no tiene permiso', () => pm.response.to.have.status(403));",
+              "pm.test('dice que roles hacian falta', () => pm.expect(pm.response.json().error.mensaje).to.include('Roles necesarios'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "50 - Permisos: el AUDITOR puede ver la auditoria general",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenAuditor}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/auditoria",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auditoria"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "51 - Permisos: el TRADER no puede ver la auditoria general",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenTrader}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/auditoria",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auditoria"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 Forbidden: el usuario esta autenticado pero no tiene permiso', () => pm.response.to.have.status(403));",
+              "pm.test('dice que roles hacian falta', () => pm.expect(pm.response.json().error.mensaje).to.include('Roles necesarios'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "52 - Permisos: el TRADER no ve las estadisticas",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenTrader}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/estadisticas",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "estadisticas"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 Forbidden: el usuario esta autenticado pero no tiene permiso', () => pm.response.to.have.status(403));",
+              "pm.test('dice que roles hacian falta', () => pm.expect(pm.response.json().error.mensaje).to.include('Roles necesarios'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "53 - Permisos: el TRADER no puede pedir un reporte",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenTrader}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/reporte",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos",
+            "reporte"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 Forbidden: el usuario esta autenticado pero no tiene permiso', () => pm.response.to.have.status(403));",
+              "pm.test('dice que roles hacian falta', () => pm.expect(pm.response.json().error.mensaje).to.include('Roles necesarios'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "54 - Permisos: el TRADER no puede limpiar la cache",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenTrader}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "DELETE",
+        "url": {
+          "raw": "{{baseUrl}}/api/admin/cache",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "admin",
+            "cache"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 Forbidden: el usuario esta autenticado pero no tiene permiso', () => pm.response.to.have.status(403));",
+              "pm.test('dice que roles hacian falta', () => pm.expect(pm.response.json().error.mensaje).to.include('Roles necesarios'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "55 - Permisos: el TRADER no puede tocar el modo panico",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenTrader}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"activo\": true\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/admin/modo-panico",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "admin",
+            "modo-panico"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 Forbidden: el usuario esta autenticado pero no tiene permiso', () => pm.response.to.have.status(403));",
+              "pm.test('dice que roles hacian falta', () => pm.expect(pm.response.json().error.mensaje).to.include('Roles necesarios'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "56 - Permisos: el ADMIN limpia la cache (solo la de activos)",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenAdmin}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "DELETE",
+        "url": {
+          "raw": "{{baseUrl}}/api/admin/cache",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "admin",
+            "cache"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('dice cuantas entradas borro', () => pm.expect(pm.response.json().eliminadas).to.be.a('number'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "57 - Modo panico: el ADMIN lo activa",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenAdmin}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"activo\": true\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/admin/modo-panico",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "admin",
+            "modo-panico"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('queda activo', () => pm.expect(pm.response.json().modoPanico).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "58 - Modo panico: el TRADER no puede crear",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenTrader}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"simbolo\": \"DOGE\",\n  \"nombre\": \"Dogecoin\",\n  \"cantidad\": 10,\n  \"precioCompra\": 0.15\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/activos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+              "pm.test('lo bloquea el modo panico, no el rol', () => pm.expect(pm.response.json().error.mensaje).to.include('modo pánico'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "59 - Modo panico: el TRADER no puede cambiar sus preferencias",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenTrader}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"limiteAlertaUsd\": 1\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/preferencias",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "preferencias"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+              "pm.test('lo bloquea el modo panico', () => pm.expect(pm.response.json().error.mensaje).to.include('modo pánico'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "60 - Modo panico: el TRADER sigue pudiendo leer",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenTrader}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "61 - Modo panico: el ADMIN sigue pudiendo escribir",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenAdmin}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"monedaVisualizacion\": \"eur\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/preferencias",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "preferencias"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('guardo sus preferencias', () => pm.expect(pm.response.json().monedaVisualizacion).to.eql('EUR'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "62 - Modo panico: el ADMIN consulta el estado",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenAdmin}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/admin/modo-panico",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "admin",
+            "modo-panico"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('esta activo', () => pm.expect(pm.response.json().modoPanico).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "63 - Modo panico: el ADMIN lo desactiva",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenAdmin}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"activo\": false\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/admin/modo-panico",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "admin",
+            "modo-panico"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('queda apagado', () => pm.expect(pm.response.json().modoPanico).to.eql(false));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "64 - Modo panico: el TRADER vuelve a poder escribir",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenTrader}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"limiteAlertaUsd\": 7500\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/preferencias",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "preferencias"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "65 - Preferencias por usuario: el TRADER sigue viendo las suyas (no las del ADMIN)",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{tokenTrader}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/preferencias",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "preferencias"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test('moneda del TRADER, no la del ADMIN', () => pm.expect(r.monedaVisualizacion).to.eql('UYU'));",
+              "pm.test('limite del TRADER', () => pm.expect(r.limiteAlertaUsd).to.eql(7500));"
             ]
           }
         }
