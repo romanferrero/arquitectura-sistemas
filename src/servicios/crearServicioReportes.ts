@@ -73,9 +73,9 @@ export function crearServicioReportes(dependencias: {
         estado: trabajo.estado,
         progreso: trabajo.estado === "completado" ? 100 : trabajo.progreso,
         solicitadoEn: trabajo.datos.solicitadoEn,
-        solicitadoPor: trabajo.datos.solicitadoPor,
         intentos: trabajo.intentos,
       };
+      if (trabajo.datos.solicitadoPor !== undefined) seguimiento.solicitadoPor = trabajo.datos.solicitadoPor;
       if (trabajo.resultado !== undefined) seguimiento.resultado = trabajo.resultado;
       if (trabajo.estado === "fallido" && trabajo.motivo !== undefined) seguimiento.motivo = trabajo.motivo;
       return seguimiento;

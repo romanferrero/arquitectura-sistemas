@@ -63,12 +63,15 @@ const servidor = createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/oauth/token") {
       const datos = await leerCuerpo(req);
-      const usuario = USUARIOS[datos["username"] ?? ""];
+      // `Object.hasOwn`: un `username=__proto__` o `constructor` no tiene que "existir" por herencia.
+      const nombre = datos["username"] ?? "";
+      const usuario = Object.hasOwn(USUARIOS, nombre) ? USUARIOS[nombre] : undefined;
       if (datos["grant_type"] !== "password" || usuario === undefined || datos["password"] !== PASSWORD) {
         return responder(403, { error: "invalid_grant", error_description: "Wrong email or password." });
       }
       // `?vence_en=-60` emite un token que ya vencio hace un minuto: para probar el 401 de un token vencido.
       const venceEn = Number(url.searchParams.get("vence_en") ?? 3600);
+      if (!Number.isFinite(venceEn)) return responder(400, { error: "invalid_request", error_description: "vence_en debe ser un numero" });
       const ahora = Math.floor(Date.now() / 1000);
       const token = await new SignJWT({ [CLAIM_ROLES]: usuario.roles })
         .setProtectedHeader({ alg: "RS256", kid: "idp-falso-1" })
