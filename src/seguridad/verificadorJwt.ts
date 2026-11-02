@@ -1,5 +1,6 @@
 import { errors, jwtVerify } from "jose";
 import type { JWTVerifyGetKey } from "jose";
+import { describirError } from "../datos/describirError.ts";
 import { ErrorApi } from "../errores/ErrorApi.ts";
 import { ROLES } from "../modelos/usuario.ts";
 import type { Rol, Usuario } from "../modelos/usuario.ts";
@@ -20,6 +21,17 @@ export type ConfigVerificador = {
 };
 
 /**
+ * Marca un fallo al CONSEGUIR la clave (la red, el proveedor): eso si es un 503. Cualquier otro error
+ * que no sea de `jose` es un bug de la propia aplicacion y no se disfraza de "el proveedor no responde".
+ */
+class FalloDelProveedor extends Error {
+  constructor(causa: unknown) {
+    super(describirError(causa));
+    this.name = "FalloDelProveedor";
+  }
+}
+
+/**
  * Verifica un JWT y devuelve quien es el usuario y que roles tiene.
  *
  * Es una FABRICA: la clave entra por parametro. En la aplicacion es el conjunto de claves
@@ -36,14 +48,29 @@ export type ConfigVerificador = {
  * Dos clases de falla, con distinto codigo HTTP:
  *  - 401: el token es invalido, esta vencido o no es para esta API. Culpa del cliente.
  *  - 503: no se pudieron bajar las claves del proveedor. No es culpa del cliente ni del token.
+ * Un error que no es ninguno de los dos es un bug nuestro: sigue de largo y sale como 500 (con su stack en el log).
+ *
+ * Limite conocido: con el proveedor caido y SIN claves en memoria, cada peticion espera hasta el tiempo
+ * maximo de descarga (3 s) antes del 503. `jose` junta las descargas simultaneas en una sola, pero las
+ * conexiones quedan esperando; una rafaga de tokens con forma valida las mantiene ocupadas ese rato.
  */
 export function crearVerificadorJwt(config: ConfigVerificador) {
   const { issuer, audience, claimRoles, obtenerClave, registrador, toleranciaSegundos = 5 } = config;
 
+  // Todo lo que falle al pedir la clave y NO sea un error de `jose` (que habla del token) es la red o el proveedor.
+  const claveDelProveedor: JWTVerifyGetKey = async (...argumentos) => {
+    try {
+      return await obtenerClave(...argumentos);
+    } catch (error) {
+      if (error instanceof errors.JOSEError) throw error;
+      throw new FalloDelProveedor(error);
+    }
+  };
+
   return async function verificar(token: string): Promise<Usuario> {
     let payload;
     try {
-      ({ payload } = await jwtVerify(token, obtenerClave, {
+      ({ payload } = await jwtVerify(token, claveDelProveedor, {
         issuer,
         audience,
         algorithms: ["RS256"],
@@ -66,32 +93,26 @@ function rolesDe(claim: unknown): Rol[] {
   return ROLES.filter((rol) => claim.includes(rol));
 }
 
-/** De un error de `jose` al ErrorApi que corresponde. */
-function traducir(error: unknown, registrador: Registrador): ErrorApi {
+/** De un error de `jose` al ErrorApi que corresponde; un error inesperado se devuelve tal cual (sale como 500). */
+function traducir(error: unknown, registrador: Registrador): unknown {
   if (error instanceof errors.JWTExpired) {
     return new ErrorApi(401, "El token venció");
   }
   // Fallo de INFRAESTRUCTURA al conseguir las claves: sin ellas no se puede decidir nada.
-  if (esFalloDelProveedor(error)) {
-    registrador.error(`No se pudieron obtener las claves del proveedor de identidad: ${describir(error)}`);
+  if (error instanceof FalloDelProveedor || esFalloDelProveedor(error)) {
+    registrador.error(`No se pudieron obtener las claves del proveedor de identidad: ${describirError(error)}`);
     return new ErrorApi(503, "No se pudo verificar el token: el proveedor de identidad no responde");
   }
   // Todo lo demas que lance `jose` es un problema del token. No se detalla cual: no ayuda a un atacante.
   if (error instanceof errors.JOSEError) {
     return new ErrorApi(401, "Token inválido");
   }
-  // Un error que no es de `jose` no es culpa del cliente. Lo unico que sale a la red al verificar
-  // es la descarga de las claves, asi que casi siempre es eso (por ejemplo `fetch failed`).
-  registrador.error(`Error inesperado al verificar el token (probablemente la red): ${describir(error)}`);
-  return new ErrorApi(503, "No se pudo verificar el token: el proveedor de identidad no responde");
+  // Ni del token ni del proveedor: un bug nuestro. No se lo presenta como una caida de Auth0.
+  return error;
 }
 
 function esFalloDelProveedor(error: unknown): boolean {
   if (error instanceof errors.JWKSTimeout || error instanceof errors.JWKSInvalid) return true;
   // La descarga de las JWKS que no devuelve 200 se informa como un error generico de jose.
   return error instanceof errors.JOSEError && error.code === "ERR_JOSE_GENERIC" && /JSON Web Key Set/i.test(error.message);
-}
-
-function describir(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }

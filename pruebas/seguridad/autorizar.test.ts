@@ -85,7 +85,7 @@ describe("crearAutorizacion · otros casos", () => {
 
     correr(autorizar("ADMIN"), ["AUDITOR"], "auth0|ana");
 
-    expect(lineas).toEqual(["[INFO] Autorizacion: Acceso denegado: auth0|ana (roles: AUDITOR) intentó DELETE /activos/1"]);
+    expect(lineas).toEqual(["[WARN] Autorizacion: Acceso denegado: auth0|ana (roles: AUDITOR) intentó DELETE /activos/1"]);
   });
 
   test("un acceso permitido no ensucia el log", () => {

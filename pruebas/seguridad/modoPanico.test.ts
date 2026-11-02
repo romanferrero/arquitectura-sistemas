@@ -178,7 +178,7 @@ describe("crearModoPanico · bloquear las escrituras", () => {
 
     await escribir(modo, ["TRADER"], "auth0|ana");
 
-    expect(lineas).toContain("[INFO] ModoPanico: Escritura bloqueada por el modo pánico: auth0|ana intentó POST /activos");
+    expect(lineas).toContain("[WARN] ModoPanico: Escritura bloqueada por el modo pánico: auth0|ana intentó POST /activos");
   });
 
   describe("FALLA CERRADO si no se puede leer el interruptor", () => {

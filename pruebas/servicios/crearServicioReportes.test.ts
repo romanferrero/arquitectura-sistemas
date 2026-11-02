@@ -84,6 +84,13 @@ describe("crearServicioReportes · consultar", () => {
     });
   });
 
+  test("un reporte de antes de la autenticación (sin solicitadoPor) se consulta igual, sin ese campo", async () => {
+    const { servicio, trabajos } = armar();
+    trabajos.set(ID, { estado: "en_cola", progreso: 0, datos: { idReporte: ID, solicitadoEn: datos.solicitadoEn }, intentos: 0 });
+
+    expect(await servicio.consultar(ID)).not.toHaveProperty("solicitadoPor");
+  });
+
   test("un reporte procesándose muestra su progreso", async () => {
     const { servicio, trabajos } = armar();
     trabajos.set(ID, { estado: "procesando", progreso: 65, datos, intentos: 1 });

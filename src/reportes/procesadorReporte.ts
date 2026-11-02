@@ -44,7 +44,13 @@ export function crearProcesadorReporte(dependencias: {
       entidadId: idReporte,
       // El reporte completo queda en la cola; en la auditoria va lo que identifica el resultado.
       despues: { resumen: reporte.resumen, sinPrecio: reporte.sinPrecio },
-      metadatos: { origen: "worker", usuario: solicitadoPor, intento, solicitadoEn, duracionMs: ahora().getTime() - inicio },
+      metadatos: {
+        origen: "worker",
+        ...(solicitadoPor === undefined ? {} : { usuario: solicitadoPor }),
+        intento,
+        solicitadoEn,
+        duracionMs: ahora().getTime() - inicio,
+      },
     });
     return reporte;
   };

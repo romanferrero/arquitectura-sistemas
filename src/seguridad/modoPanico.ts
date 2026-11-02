@@ -67,7 +67,7 @@ export function crearModoPanico(dependencias: { redis: ComandosRedis; registrado
         return;
       }
       if (await estaActivo()) {
-        registrador.info(`Escritura bloqueada por el modo pánico: ${usuario.sub} intentó ${req.method} ${req.path}`);
+        registrador.warn(`Escritura bloqueada por el modo pánico: ${usuario.sub} intentó ${req.method} ${req.path}`);
         throw new ErrorApi(403, "El sistema está en modo pánico: las operaciones de escritura están bloqueadas");
       }
       next();
