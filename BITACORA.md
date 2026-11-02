@@ -7,7 +7,7 @@ El plan vigente (Partes 5 a 8) está en [PLAN.md](PLAN.md); el de las Partes 3 y
 
 ## Resumen: skills y herramientas usadas
 
-Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron cuatro veces,
+Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron seis veces,
 siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUDE.md`).
 
 | Skill | Cuándo | Para qué | Resultado |
@@ -16,8 +16,10 @@ siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUD
 | `/code-review` (nivel *high*) | Cierre de la Parte 4 | Ídem, sobre las sesiones 4 a 7 | 10 hallazgos: 7 corregidos y 3 documentados |
 | `/security-review` | Cierre de la Parte 4 | Buscar vulnerabilidades en los cambios | Sin vulnerabilidades de alta confianza |
 | `/code-review` (nivel *high*) | Cierre de la Parte 5 | Ídem, sobre las sesiones 9 y 10 (Redis, BullMQ y el worker) | 9 hallazgos: 6 corregidos y 3 documentados |
+| `/code-review` (nivel *high*) | Cierre de la Parte 6 | Ídem, sobre las sesiones 11 y 12 (autenticación, roles y modo pánico) | 10 hallazgos: 6 corregidos y 4 documentados |
+| `/security-review` | Cierre de la Parte 6 | Buscar vulnerabilidades en la autenticación y la autorización | Sin vulnerabilidades de alta confianza |
 
-Las cuatro corren en un subproceso aparte (no comparten el contexto de la sesión). En el resto de las sesiones no se
+Las seis corren en un subproceso aparte (no comparten el contexto de la sesión). En el resto de las sesiones no se
 usó ninguna skill.
 
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
@@ -902,3 +904,41 @@ mitad de un reporte lo termina y sale con código 0.
 **Pendientes**
 - Cierre de la Parte 6: `/code-review` y `/security-review`, correcciones, OK del estudiante, merge a `main`.
 - A validar por el estudiante: la matriz de permisos (en especial que el TRADER no vea la auditoría general).
+
+---
+
+## Revisión de la Parte 6 · 2026-10-31
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
+- **Skills usadas:** `/code-review` en nivel *high* y `/security-review`, sobre lo que `develop` tenía de más que `main` (sesiones 11 y 12).
+  Las correcciones se hicieron en `fix/revision-parte-6`.
+
+### `/code-review` · 10 hallazgos
+
+| # | Hallazgo | Decisión |
+|---|---|---|
+| 1 | `express.json()` corría antes de `autenticar`: a un anónimo se le parseaba el cuerpo (y con JSON roto recibía 400, no 401) | **Corregido:** el parser va después de autenticar. Verificado con la API real: sin token, JSON roto → 401 |
+| 2 | Todo error que no fuera de `jose` se traducía a 503 "el proveedor no responde", escondiendo un bug propio | **Corregido:** solo se marca como fallo del proveedor lo que falla al pedir la clave; el resto sale como 500 con su stack. Test nuevo |
+| 3 | Con el proveedor caído y sin claves en memoria cada petición espera hasta 3 s (no hay caché negativa) | **Documentado** (en el código, el README y `RESPUESTAS-PARTE-6.md`). Un cortacircuitos delante de `jose` podría bloquear también las claves que sí están en memoria |
+| 4 | El modo pánico falla cerrado y consulta Redis en cada escritura: una caída breve de Redis da 503 a las escrituras de TRADER | **Documentado:** es el compromiso elegido (rechazar ante la duda). Se agregó la advertencia al README |
+| 5 | `describir()` duplicaba `describirError` | **Corregido** |
+| 6 | La clave `preferencias:billetera` quedó huérfana al pasar a preferencias por usuario | **No se corrige:** eran datos de desarrollo y ya estaba documentado; se borró la clave del Redis local |
+| 7 | `solicitadoPor` era obligatorio pero los trabajos ya encolados antes de la Parte 6 no lo traen | **Corregido:** pasó a opcional, con tests |
+| 8 | Los accesos denegados se logueaban como `info`; se dijo que `req.path` permitía inyectar líneas | Nivel **corregido a `warn`** (se agregó `warn` al registrador). **La inyección no aplica:** `req.path` de Express llega sin decodificar |
+| 9 | `idpFalso` aceptaba `__proto__` o `constructor` como usuario y un `vence_en` no numérico daba 500 | **Corregido** (`Object.hasOwn` y validación) |
+| 10 | `PUT /preferencias` se bloquea en modo pánico y el AUDITOR nunca puede guardar sus preferencias | **No se corrige:** la letra pide bloquear **todas** las escrituras y que el AUDITOR no modifique nada |
+
+**Hallazgo extra, no marcado por la revisión:** al probar el punto 1 con un cuerpo de 1 MB, la API daba **500** en lugar de 413 (defecto anterior:
+el manejador de errores solo conocía el JSON roto). Se corrigió: 413 para un cuerpo demasiado grande y 415 para un tipo de contenido no soportado.
+
+### `/security-review` · sin vulnerabilidades de alta confianza
+
+Revisó la verificación del JWT (firma, algoritmo `RS256` fijo, `iss`, `aud`, `exp`), que `autenticar` va antes que todas las rutas, la matriz de roles
+y su test de contrato, el modo pánico, las preferencias por usuario, la limpieza de caché con `SCAN` (patrón fijo `activo:*`), las claves de Redis
+armadas con datos del cliente, la fuga de información en logs y respuestas y la herramienta del proveedor falso. Dos observaciones menores, ya
+documentadas como limitaciones: los roles viajan en el token (un cambio de rol se nota recién cuando vence, 24 h) y la espera de 3 s con el
+proveedor caído y sin claves en memoria. La consigna de la skill está en inglés; el informe se entregó en español.
+
+**Verificación:** `check` y **388 tests** en verde (3 nuevos); con la API real: sin token + JSON roto → 401, con token + JSON roto → 400, con token + 1 MB → 413.
+
+**Pendiente:** el OK del estudiante para el merge de `develop` a `main` (cierre de la Parte 6).

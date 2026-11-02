@@ -425,7 +425,11 @@ curl http://localhost:3000/api/admin/modo-panico -H "Authorization: Bearer <toke
   memoria cambiaría solo en la instancia que recibió el pedido; en Redis lo ven todas al instante, sin reiniciar nada.
 - **Falla cerrado:** si no se puede leer el interruptor (Redis caído), las escrituras de quien no es ADMIN dan **503** en vez de
   dejarse pasar. Ante la duda, durante un incidente, no se escribe. Verificado con Redis detenido.
-- Quién lo activa o apaga, y cada escritura bloqueada, quedan en el log.
+- **Costo de fallar cerrado:** el interruptor se consulta en Redis en **cada escritura** de quien no es ADMIN, así que una caída
+  breve de Redis (por ejemplo mientras se reconecta) hace que esas escrituras den 503 aunque MySQL esté sano y el modo esté apagado.
+  Es el compromiso elegido: durante un incidente es preferible rechazar a dejar pasar. Se podría guardar el valor unos segundos en
+  cada instancia, a cambio de que el cambio tarde ese rato en verse.
+- Quién lo activa o apaga, y cada escritura bloqueada, quedan en el log (los accesos denegados con nivel `warn`).
 
 **Limpiar la caché** (`DELETE /api/admin/cache`, solo ADMIN) borra **únicamente** las entradas `activo:*`, recorriendo Redis con
 `SCAN` por tandas. Nunca `FLUSHALL`/`FLUSHDB`: Redis también guarda los trabajos de la cola, las preferencias de cada usuario, el

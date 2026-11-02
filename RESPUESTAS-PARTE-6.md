@@ -75,6 +75,10 @@ ADMIN 201, lectura 200), las preferencias aisladas por usuario y que limpiar la 
 - **Permisos finos (*scopes*)** en lugar de roles gruesos (`crear:activos`, `ver:auditoria`…), para no tocar el código al cambiar quién puede qué.
 - **MFA obligatorio para el ADMIN** y alertas ante un uso inusual del modo pánico.
 - **Auditar en MongoDB** (no solo en el log) quién activó el modo pánico y quién limpió la caché.
+- **Caché negativa o cortacircuitos** para las claves del proveedor: con Auth0 caído y sin claves en memoria, cada petición espera hasta 3 s
+  antes del 503.
+- **Cachear unos segundos el modo pánico** en cada instancia: hoy se consulta Redis en cada escritura y, al fallar cerrado, una caída
+  breve de Redis frena las escrituras de TRADER aunque el modo esté apagado.
 - **Rate limiting** por usuario/IP: hoy alguien con permiso puede saturar la API o la cola de reportes.
 - **HTTPS** en la entrada (terminación TLS, `helmet`, CORS explícito): hoy la API habla HTTP plano en local.
 - **Secretos fuera del `.env`** (gestor de secretos) y **usuario de aplicación con permisos mínimos** en MongoDB (hoy usa el root).
