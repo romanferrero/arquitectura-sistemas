@@ -2,12 +2,12 @@ import { describirError } from "../datos/describirError.ts";
 import type { ComandosRedis } from "../datos/tiposRedis.ts";
 import { ErrorApi } from "../errores/ErrorApi.ts";
 import type { Registrador } from "../pipeline/pipeline.ts";
-import { PREFIJO_ACTIVO } from "./crearCacheActivos.ts";
+import { CLAVE_LISTA, PREFIJO_ACTIVO } from "./crearCacheActivos.ts";
 
 /**
  * Operaciones administrativas (solo ADMIN).
  *
- * `limpiarCache` borra UNICAMENTE las claves de la cache de activos (`activo:*`). Redis guarda mucho
+ * `limpiarCache` borra UNICAMENTE las claves de la cache de activos (`activo:*` y la lista `activos:todos`). Redis guarda mucho
  * mas que cache: los trabajos de la cola (`bull:*`), las preferencias de cada usuario, el contador
  * de reportes, el ranking y el modo panico. Un `FLUSHALL` o `FLUSHDB` los borraria a todos: se
  * perderian reportes pendientes y se apagaria el modo panico en pleno incidente. Por eso se recorre
@@ -34,6 +34,8 @@ export function crearServicioAdministracion(dependencias: {
           cursor = tanda.cursor;
           if (tanda.keys.length > 0) eliminadas += await redis.del(tanda.keys);
         } while (cursor !== "0");
+        // La lista completa tambien es cache (`activos:todos`), pero no empieza con `activo:`.
+        eliminadas += await redis.del(CLAVE_LISTA);
       } catch (error) {
         registrador.error(`No se pudo limpiar la caché: ${describirError(error)}`);
         throw new ErrorApi(503, "No se pudo limpiar la caché en este momento");
