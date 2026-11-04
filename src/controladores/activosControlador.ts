@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
-import * as servicio from "../servicios/activosServicio.ts";
+import { comandosActivos } from "../servicios/comandos/activosComandosServicio.ts";
+import { consultasActivos } from "../servicios/consultas/activosConsultasServicio.ts";
 import { analizarActivos } from "../servicios/analisisServicio.ts";
 import { obtenerPrecio } from "../servicios/preciosServicio.ts";
 import { ErrorApi } from "../errores/ErrorApi.ts";
@@ -8,6 +9,9 @@ import { env } from "../config/env.ts";
 import { usuarioDe } from "../seguridad/usuarioActual.ts";
 
 /**
+ * CQRS: las operaciones que LEEN van a `consultasActivos` (modelo de lectura en Redis) y las que
+ * ESCRIBEN a `comandosActivos` (MySQL + eventos). El controlador solo elige a cual llamar.
+ *
  * Los controladores solo traducen entre HTTP y el servicio: leen params/body,
  * llaman al servicio y eligen el codigo de estado. Cero logica de negocio.
  *
@@ -18,32 +22,33 @@ import { usuarioDe } from "../seguridad/usuarioActual.ts";
  * se accede a req.params.id sin conversiones ni comprobaciones extra.
  */
 
-// GET /api/activos  (opcional: ?simbolo=BTC)
+// GET /api/activos  (opcional: ?simbolo=BTC; X-Cache indica si salio de Redis o hubo que ir a MySQL)
 export async function listar(req: Request, res: Response): Promise<void> {
   const simbolo = typeof req.query["simbolo"] === "string" ? req.query["simbolo"] : undefined;
-  res.status(200).json(await servicio.listarActivos(simbolo));
+  const { activos, cache } = await consultasActivos.listarActivos(simbolo);
+  res.status(200).set("X-Cache", cache).json(activos);
 }
 
 // GET /api/activos/:id  (X-Cache indica si salio de Redis o hubo que ir a MySQL)
 export async function obtener(req: Request<{ id: string }>, res: Response): Promise<void> {
-  const { activo, cache } = await servicio.consultarActivo(req.params.id);
+  const { activo, cache } = await consultasActivos.consultarActivo(req.params.id);
   res.status(200).set("X-Cache", cache).json(activo);
 }
 
 // POST /api/activos
 export async function crear(req: Request, res: Response): Promise<void> {
-  const activo = await servicio.crearActivo(req.body, usuarioDe(res).sub);
+  const activo = await comandosActivos.crearActivo(req.body, usuarioDe(res).sub);
   res.status(201).location(`/api/activos/${activo.id}`).json(activo);
 }
 
 // PUT /api/activos/:id
 export async function actualizar(req: Request<{ id: string }>, res: Response): Promise<void> {
-  res.status(200).json(await servicio.actualizarActivo(req.params.id, req.body, usuarioDe(res).sub));
+  res.status(200).json(await comandosActivos.actualizarActivo(req.params.id, req.body, usuarioDe(res).sub));
 }
 
 // DELETE /api/activos/:id
 export async function eliminar(req: Request<{ id: string }>, res: Response): Promise<void> {
-  await servicio.eliminarActivo(req.params.id, usuarioDe(res).sub);
+  await comandosActivos.eliminarActivo(req.params.id, usuarioDe(res).sub);
   res.status(204).send(); // 204 no lleva cuerpo
 }
 
@@ -57,7 +62,7 @@ export async function obtenerConPrecio(
   req: Request<{ id: string }>,
   res: Response,
 ): Promise<void> {
-  res.status(200).json(await servicio.obtenerActivoConPrecio(req.params.id));
+  res.status(200).json(await consultasActivos.obtenerActivoConPrecio(req.params.id));
 }
 
 // GET /api/precios/:simbolo

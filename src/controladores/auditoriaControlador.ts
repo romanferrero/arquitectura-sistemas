@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { historialDeActivo } from "../servicios/activosServicio.ts";
+import { consultasActivos } from "../servicios/consultas/activosConsultasServicio.ts";
 import { auditoria } from "../servicios/auditoriaServicio.ts";
 
 /**
@@ -9,7 +9,7 @@ import { auditoria } from "../servicios/auditoriaServicio.ts";
 
 // GET /api/activos/:id/historial
 export async function historial(req: Request<{ id: string }>, res: Response): Promise<void> {
-  res.status(200).json(await historialDeActivo(req.params.id));
+  res.status(200).json(await consultasActivos.historialDeActivo(req.params.id));
 }
 
 // GET /api/auditoria  (opcional: ?operacion=ELIMINAR&limite=20)
