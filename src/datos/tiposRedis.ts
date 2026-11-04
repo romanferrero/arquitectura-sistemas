@@ -29,4 +29,9 @@ export type ComandosRedis = {
   ): Promise<{ value: string; score: number }[]>;
   hSet(clave: string, campos: Record<string, string>): Promise<number>;
   hGetAll(clave: string): Promise<Record<string, string>>;
+  /**
+   * PUBLISH: manda un mensaje a todos los que estan suscritos al canal en este momento y devuelve cuantos
+   * lo recibieron. Pub/Sub NO guarda el mensaje: quien no esta suscrito justo ahora no lo recibe nunca.
+   */
+  publish(canal: string, mensaje: string): Promise<number>;
 };

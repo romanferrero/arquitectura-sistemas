@@ -1,6 +1,7 @@
 import { UniqueConstraintError } from "sequelize";
 import type { Activo } from "../modelos/activo.ts";
 import { sequelize } from "./conexiones.ts";
+import { SimboloDuplicadoError } from "./simboloDuplicadoError.ts";
 import { filaAActivo, activoAFila } from "./mapeoActivo.ts";
 import { ActivoModelo } from "./modelos/activoModelo.ts";
 
@@ -15,23 +16,6 @@ import { ActivoModelo } from "./modelos/activoModelo.ts";
  * redondea los DECIMAL en silencio (98.456 queda como 98.46) y el cliente tiene
  * que ver lo que realmente quedo guardado, no lo que mando.
  */
-
-/**
- * El simbolo ya existe. Lo lanza el repositorio cuando MySQL rechaza la escritura
- * por la restriccion UNIQUE; el servicio decide que significa eso para el cliente.
- *
- * Confiar en la restriccion (y no en "buscar primero y guardar despues") es lo
- * unico seguro: dos pedidos simultaneos pueden pasar la comprobacion previa.
- */
-export class SimboloDuplicadoError extends Error {
-  readonly simbolo: string;
-
-  constructor(simbolo: string) {
-    super(`Ya existe un activo con el símbolo ${simbolo}`);
-    this.name = "SimboloDuplicadoError";
-    this.simbolo = simbolo;
-  }
-}
 
 /** Convierte el error de la restriccion UNIQUE en el del repositorio; el resto sigue de largo. */
 function traducir(error: unknown, simbolo: string): unknown {
