@@ -55,8 +55,8 @@ export function crearServicioReportes(dependencias: {
 
   return {
     /** Deja el pedido en la cola y responde enseguida: el reporte se genera aparte. */
-    async solicitar(): Promise<{ idReporte: string; estado: "en_cola" }> {
-      const datos: DatosReporte = { idReporte: generarId(), solicitadoEn: ahora().toISOString() };
+    async solicitar(usuario: string): Promise<{ idReporte: string; estado: "en_cola" }> {
+      const datos: DatosReporte = { idReporte: generarId(), solicitadoEn: ahora().toISOString(), solicitadoPor: usuario };
       await conCola(() => cola.agregar(datos));
       registrador.info(`Reporte ${datos.idReporte} encolado`);
       return { idReporte: datos.idReporte, estado: "en_cola" };
@@ -75,6 +75,7 @@ export function crearServicioReportes(dependencias: {
         solicitadoEn: trabajo.datos.solicitadoEn,
         intentos: trabajo.intentos,
       };
+      if (trabajo.datos.solicitadoPor !== undefined) seguimiento.solicitadoPor = trabajo.datos.solicitadoPor;
       if (trabajo.resultado !== undefined) seguimiento.resultado = trabajo.resultado;
       if (trabajo.estado === "fallido" && trabajo.motivo !== undefined) seguimiento.motivo = trabajo.motivo;
       return seguimiento;

@@ -31,7 +31,7 @@ export function crearProcesadorReporte(dependencias: {
   const { generar, registrarAuditoria, registrador, ahora } = dependencias;
 
   return async function procesar(trabajo: TrabajoEnProceso): Promise<ReporteValoracion> {
-    const { idReporte, solicitadoEn } = trabajo.data;
+    const { idReporte, solicitadoEn, solicitadoPor } = trabajo.data;
     const intento = trabajo.attemptsMade + 1;
     const inicio = ahora().getTime();
     registrador.info(`Generando el reporte ${idReporte} (intento ${intento})`);
@@ -44,7 +44,13 @@ export function crearProcesadorReporte(dependencias: {
       entidadId: idReporte,
       // El reporte completo queda en la cola; en la auditoria va lo que identifica el resultado.
       despues: { resumen: reporte.resumen, sinPrecio: reporte.sinPrecio },
-      metadatos: { origen: "worker", intento, solicitadoEn, duracionMs: ahora().getTime() - inicio },
+      metadatos: {
+        origen: "worker",
+        ...(solicitadoPor === undefined ? {} : { usuario: solicitadoPor }),
+        intento,
+        solicitadoEn,
+        duracionMs: ahora().getTime() - inicio,
+      },
     });
     return reporte;
   };

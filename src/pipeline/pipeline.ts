@@ -13,6 +13,8 @@
 /** Lo minimo que un filtro necesita para dejar registro de lo que hizo. */
 export type Registrador = {
   info(mensaje: string): void;
+  /** Algo anormal que no es un error de la aplicacion: por ejemplo, un acceso denegado. */
+  warn(mensaje: string): void;
   error(mensaje: string): void;
 };
 

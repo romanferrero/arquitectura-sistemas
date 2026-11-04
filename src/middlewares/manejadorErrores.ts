@@ -40,7 +40,20 @@ export function manejadorErrores(
     return;
   }
 
-  // 3) Cualquier otra cosa: es un bug nuestro. Se loguea completo en el
+  // 3) Otros errores del cliente que lanza el parser del body (express.json): un cuerpo demasiado grande
+  //    (413), un tipo de contenido o una codificacion no soportados (415). Traen `status` y `expose`.
+  //    Sin esto salian como 500 y se ensuciaba el log con un "error nuestro" que era del cliente.
+  const estado = (error as { status?: unknown } | null)?.status;
+  if (typeof estado === "number" && estado >= 400 && estado < 500 && (error as { expose?: unknown }).expose === true) {
+    const mensajes: Record<number, string> = {
+      413: "El cuerpo de la petición es demasiado grande",
+      415: "El tipo de contenido o la codificación del cuerpo no está soportado",
+    };
+    res.status(estado).json({ error: { mensaje: mensajes[estado] ?? "Petición inválida" } });
+    return;
+  }
+
+  // 4) Cualquier otra cosa: es un bug nuestro. Se loguea completo en el
   //    servidor pero al cliente solo le llega un mensaje generico.
   // Se arma el texto a mano: un Error no es serializable por Winston (sus
   // propiedades no son enumerables) y el log perderia el mensaje y el stack.

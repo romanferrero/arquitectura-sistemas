@@ -28,7 +28,7 @@ function armar(cambios: { generar?: () => Promise<ReporteValoracion>; registrarA
     ahora: () => new Date((reloj += 500)),
   });
   const trabajo: TrabajoEnProceso = {
-    data: { idReporte: "rep-1", solicitadoEn: "2026-10-30T11:59:00.000Z" },
+    data: { idReporte: "rep-1", solicitadoEn: "2026-10-30T11:59:00.000Z", solicitadoPor: "auth0|admin" },
     attemptsMade: 0,
     updateProgress: async (porcentaje) => void progreso.push(porcentaje),
   };
@@ -54,9 +54,18 @@ describe("crearProcesadorReporte", () => {
         entidad: "Reporte",
         entidadId: "rep-1",
         despues: { resumen: reporte.resumen, sinPrecio: ["RARO"] },
-        metadatos: { origen: "worker", intento: 1, solicitadoEn: "2026-10-30T11:59:00.000Z", duracionMs: 500 },
+        metadatos: { origen: "worker", usuario: "auth0|admin", intento: 1, solicitadoEn: "2026-10-30T11:59:00.000Z", duracionMs: 500 },
       },
     ]);
+  });
+
+  test("un trabajo de antes de la autenticación (sin solicitadoPor) se procesa igual, sin usuario en la auditoría", async () => {
+    const { procesar, trabajo, auditados } = armar();
+
+    await procesar({ ...trabajo, data: { idReporte: "rep-viejo", solicitadoEn: "2026-10-30T11:00:00.000Z" } });
+
+    expect(auditados[0]?.metadatos).not.toHaveProperty("usuario");
+    expect(auditados[0]?.entidadId).toBe("rep-viejo");
   });
 
   test("el intento cuenta desde 1 y sube con los reintentos", async () => {

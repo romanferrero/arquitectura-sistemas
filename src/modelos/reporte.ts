@@ -36,6 +36,11 @@ export type ReporteValoracion = {
 export type DatosReporte = {
   idReporte: string;
   solicitadoEn: string;
+  /**
+   * Quien lo pidio (el `sub` del token): queda en la auditoria del reporte. Es opcional porque los
+   * trabajos que ya estaban en la cola antes de agregar la autenticacion no lo traen.
+   */
+  solicitadoPor?: string;
 };
 
 /** Estados que ve el cliente; la cola tiene mas y se resumen en estos cuatro. */
@@ -49,6 +54,7 @@ export type SeguimientoReporte = {
   /** 0 a 100, mientras se procesa. */
   progreso: number;
   solicitadoEn?: string;
+  solicitadoPor?: string;
   /** Cuantas veces se intento procesar (la cola reintenta los fallos). */
   intentos: number;
   /** Solo cuando esta `completado`. */

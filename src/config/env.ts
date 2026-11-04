@@ -79,6 +79,32 @@ export function redisConfig(): { host: string; puerto: number; password: string 
   };
 }
 
+/** Una URL valida; si no lo es, corta el arranque nombrando la variable. */
+function urlRequerida(nombre: string): string {
+  const texto = textoRequerido(nombre);
+  try {
+    new URL(texto);
+  } catch {
+    console.error(`[config] La variable ${nombre} debe ser una URL válida.`);
+    process.exit(1);
+  }
+  return texto;
+}
+
+/**
+ * Configuracion del proveedor de identidad que emite los JWT (Auth0 u otro). La app no sabe
+ * cual es: solo necesita quien emite, para quien, donde estan sus claves publicas y como se
+ * llama el claim de los roles. Cambiar de proveedor es cambiar estas variables.
+ */
+export function authConfig(): { issuer: string; audience: string; jwksUrl: string; claimRoles: string } {
+  return {
+    issuer: textoRequerido("AUTH_ISSUER"),
+    audience: textoRequerido("AUTH_AUDIENCE"),
+    jwksUrl: urlRequerida("AUTH_JWKS_URL"),
+    claimRoles: textoRequerido("AUTH_CLAIM_ROLES"),
+  };
+}
+
 /** Cuanto demora (simulado) el worker en generar un reporte, en milisegundos. Admite 0. */
 export function reporteDemoraMs(): number {
   return numeroNoNegativoRequerido("REPORTE_DEMORA_MS");

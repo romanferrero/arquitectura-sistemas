@@ -4,12 +4,11 @@ import { redis } from "../datos/redis.ts";
 import { crearServicioPreferencias } from "./crearServicioPreferencias.ts";
 
 /**
- * Las preferencias de la aplicacion. Por ahora hay una sola billetera (clave
- * `preferencias:billetera`); cuando haya usuarios (Parte 6) sera una clave por usuario.
+ * Las preferencias de la aplicacion: una clave por usuario (`preferencias:<sub>`).
  */
 export const preferencias = crearServicioPreferencias({
   redis,
   registrador: registradorDe("Preferencias"),
-  clave: "preferencias:billetera",
+  prefijoClave: "preferencias:",
   porDefecto: { monedaVisualizacion: env.MONEDA.toUpperCase(), limiteAlertaUsd: env.UMBRAL_MONTO_USD },
 });

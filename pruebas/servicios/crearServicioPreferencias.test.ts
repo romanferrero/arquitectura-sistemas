@@ -4,13 +4,16 @@ import { crearServicioPreferencias } from "../../src/servicios/crearServicioPref
 import { crearRegistroEnMemoria } from "../ayudas/registro.ts";
 import { crearRedisFalso } from "../ayudas/redisFalso.ts";
 
+const ANA = "auth0|ana";
+const BRUNO = "auth0|bruno";
+
 function armar() {
   const falso = crearRedisFalso();
   const registro = crearRegistroEnMemoria();
   const servicio = crearServicioPreferencias({
     redis: falso.redis,
     registrador: registro.registradorDe("Preferencias"),
-    clave: "preferencias:billetera",
+    prefijoClave: "preferencias:",
     porDefecto: { monedaVisualizacion: "USD", limiteAlertaUsd: 100000 },
   });
   return { ...falso, lineas: registro.lineas, servicio };
@@ -27,27 +30,45 @@ async function errorDe(promesa: Promise<unknown>): Promise<ErrorApi> {
 }
 
 describe("crearServicioPreferencias", () => {
+  test("cada usuario tiene las suyas: lo que guarda uno no lo ve ni lo cambia otro", async () => {
+    const { servicio, hashes } = armar();
+
+    await servicio.actualizar(ANA, { monedaVisualizacion: "EUR", limiteAlertaUsd: 500 });
+    await servicio.actualizar(BRUNO, { monedaVisualizacion: "UYU" });
+
+    expect(await servicio.obtener(ANA)).toEqual({ monedaVisualizacion: "EUR", limiteAlertaUsd: 500 });
+    expect(await servicio.obtener(BRUNO)).toEqual({ monedaVisualizacion: "UYU", limiteAlertaUsd: 100000 });
+    expect([...hashes.keys()].sort()).toEqual([`preferencias:${ANA}`, `preferencias:${BRUNO}`]);
+  });
+
+  test("un usuario que nunca configuró nada ve los valores por defecto, aunque otros sí", async () => {
+    const { servicio } = armar();
+    await servicio.actualizar(ANA, { limiteAlertaUsd: 1 });
+
+    expect(await servicio.obtener(BRUNO)).toEqual({ monedaVisualizacion: "USD", limiteAlertaUsd: 100000 });
+  });
+
   test("sin nada guardado devuelve los valores por defecto", async () => {
     const { servicio } = armar();
 
-    expect(await servicio.obtener()).toEqual({ monedaVisualizacion: "USD", limiteAlertaUsd: 100000 });
+    expect(await servicio.obtener(ANA)).toEqual({ monedaVisualizacion: "USD", limiteAlertaUsd: 100000 });
   });
 
   test("guarda las preferencias en un Hash y las devuelve con el tipo correcto", async () => {
     const { servicio, hashes } = armar();
 
-    const resultado = await servicio.actualizar({ monedaVisualizacion: "eur", limiteAlertaUsd: 2500.5 });
+    const resultado = await servicio.actualizar(ANA, { monedaVisualizacion: "eur", limiteAlertaUsd: 2500.5 });
 
     expect(resultado).toEqual({ monedaVisualizacion: "EUR", limiteAlertaUsd: 2500.5 });
-    expect(hashes.get("preferencias:billetera")).toEqual({ monedaVisualizacion: "EUR", limiteAlertaUsd: "2500.5" });
-    expect(await servicio.obtener()).toEqual(resultado);
+    expect(hashes.get(`preferencias:${ANA}`)).toEqual({ monedaVisualizacion: "EUR", limiteAlertaUsd: "2500.5" });
+    expect(await servicio.obtener(ANA)).toEqual(resultado);
   });
 
   test("actualiza solo el campo enviado y conserva el otro", async () => {
     const { servicio } = armar();
-    await servicio.actualizar({ monedaVisualizacion: "UYU", limiteAlertaUsd: 500 });
+    await servicio.actualizar(ANA, { monedaVisualizacion: "UYU", limiteAlertaUsd: 500 });
 
-    const resultado = await servicio.actualizar({ limiteAlertaUsd: 900 });
+    const resultado = await servicio.actualizar(ANA, { limiteAlertaUsd: 900 });
 
     expect(resultado).toEqual({ monedaVisualizacion: "UYU", limiteAlertaUsd: 900 });
   });
@@ -55,7 +76,7 @@ describe("crearServicioPreferencias", () => {
   test("un campo sin configurar usa el valor por defecto aunque el otro sí esté", async () => {
     const { servicio } = armar();
 
-    expect(await servicio.actualizar({ monedaVisualizacion: "EUR" })).toEqual({
+    expect(await servicio.actualizar(ANA, { monedaVisualizacion: "EUR" })).toEqual({
       monedaVisualizacion: "EUR",
       limiteAlertaUsd: 100000,
     });
@@ -74,7 +95,7 @@ describe("crearServicioPreferencias", () => {
   ])("rechaza con 400 %s y no escribe nada", async (_descripcion, cuerpo) => {
     const { servicio, comandos } = armar();
 
-    const error = await errorDe(servicio.actualizar(cuerpo));
+    const error = await errorDe(servicio.actualizar(ANA, cuerpo));
 
     expect(error.estado).toBe(400);
     expect(comandos).toEqual([]);
@@ -83,7 +104,7 @@ describe("crearServicioPreferencias", () => {
   test("informa todos los errores de validación juntos", async () => {
     const { servicio } = armar();
 
-    const error = await errorDe(servicio.actualizar({ monedaVisualizacion: "DOLAR", limiteAlertaUsd: -5 }));
+    const error = await errorDe(servicio.actualizar(ANA, { monedaVisualizacion: "DOLAR", limiteAlertaUsd: -5 }));
 
     expect(error.detalles).toHaveLength(2);
   });
@@ -93,8 +114,8 @@ describe("crearServicioPreferencias", () => {
       const { servicio, estado, lineas } = armar();
       estado.caido = true;
 
-      expect((await errorDe(servicio.obtener())).estado).toBe(503);
-      expect((await errorDe(servicio.actualizar({ limiteAlertaUsd: 10 }))).estado).toBe(503);
+      expect((await errorDe(servicio.obtener(ANA))).estado).toBe(503);
+      expect((await errorDe(servicio.actualizar(ANA, { limiteAlertaUsd: 10 }))).estado).toBe(503);
       expect(lineas).toHaveLength(2);
       expect(lineas[0]).toContain("[ERROR] Preferencias:");
     });

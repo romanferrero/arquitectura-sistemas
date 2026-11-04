@@ -23,8 +23,9 @@ const esquemaCambios = z
   .refine((cambios) => Object.keys(cambios).length > 0, "Se debe enviar monedaVisualizacion o limiteAlertaUsd");
 
 /**
- * Preferencias de la billetera guardadas en un Hash de Redis: una sola clave con
- * varios campos (HSET para escribir, HGETALL para leer).
+ * Preferencias de cada USUARIO guardadas en un Hash de Redis: una clave por usuario (`<prefijo><sub>`)
+ * con varios campos (HSET para escribir, HGETALL para leer). El `sub` sale del token ya verificado,
+ * nunca del cuerpo del pedido: nadie puede leer ni cambiar las preferencias de otro.
  *
  * A diferencia de la cache, ACA Redis es la fuente de verdad: no hay otra copia. Por eso,
  * si Redis falla, no se inventa una respuesta: es un 503 (servicio no disponible).
@@ -34,10 +35,11 @@ const esquemaCambios = z
 export function crearServicioPreferencias(dependencias: {
   redis: ComandosRedis;
   registrador: Registrador;
-  clave: string;
+  /** Lo que va delante del id del usuario en la clave de Redis, por ejemplo `preferencias:`. */
+  prefijoClave: string;
   porDefecto: Preferencias;
 }) {
-  const { redis, registrador, clave, porDefecto } = dependencias;
+  const { redis, registrador, prefijoClave, porDefecto } = dependencias;
 
   async function conRedis<T>(operacion: () => Promise<T>): Promise<T> {
     try {
@@ -48,8 +50,8 @@ export function crearServicioPreferencias(dependencias: {
     }
   }
 
-  async function leer(): Promise<Preferencias> {
-    const guardadas = await conRedis(() => redis.hGetAll(clave));
+  async function leer(usuario: string): Promise<Preferencias> {
+    const guardadas = await conRedis(() => redis.hGetAll(prefijoClave + usuario));
     // Redis guarda todo como texto: el limite vuelve a ser un numero.
     const texto = guardadas["limiteAlertaUsd"];
     const limite = Number(texto);
@@ -60,10 +62,11 @@ export function crearServicioPreferencias(dependencias: {
   }
 
   return {
+    /** Las preferencias de este usuario (con los valores por defecto donde no configuro nada). */
     obtener: leer,
 
     /** Actualiza SOLO los campos enviados (HSET) y devuelve las preferencias resultantes. */
-    async actualizar(cuerpo: unknown): Promise<Preferencias> {
+    async actualizar(usuario: string, cuerpo: unknown): Promise<Preferencias> {
       const resultado = esquemaCambios.safeParse(cuerpo);
       if (!resultado.success) {
         throw new ErrorApi(400, "Preferencias inválidas", resultado.error.issues.map((problema) => problema.message));
@@ -73,8 +76,8 @@ export function crearServicioPreferencias(dependencias: {
       if (resultado.data.monedaVisualizacion !== undefined) campos["monedaVisualizacion"] = resultado.data.monedaVisualizacion;
       if (resultado.data.limiteAlertaUsd !== undefined) campos["limiteAlertaUsd"] = String(resultado.data.limiteAlertaUsd);
 
-      await conRedis(() => redis.hSet(clave, campos));
-      return await leer();
+      await conRedis(() => redis.hSet(prefijoClave + usuario, campos));
+      return await leer(usuario);
     },
   };
 }

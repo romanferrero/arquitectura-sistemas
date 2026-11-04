@@ -7,7 +7,7 @@ El plan vigente (Partes 5 a 8) está en [PLAN.md](PLAN.md); el de las Partes 3 y
 
 ## Resumen: skills y herramientas usadas
 
-Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron cuatro veces,
+Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron seis veces,
 siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUDE.md`).
 
 | Skill | Cuándo | Para qué | Resultado |
@@ -16,14 +16,16 @@ siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUD
 | `/code-review` (nivel *high*) | Cierre de la Parte 4 | Ídem, sobre las sesiones 4 a 7 | 10 hallazgos: 7 corregidos y 3 documentados |
 | `/security-review` | Cierre de la Parte 4 | Buscar vulnerabilidades en los cambios | Sin vulnerabilidades de alta confianza |
 | `/code-review` (nivel *high*) | Cierre de la Parte 5 | Ídem, sobre las sesiones 9 y 10 (Redis, BullMQ y el worker) | 9 hallazgos: 6 corregidos y 3 documentados |
+| `/code-review` (nivel *high*) | Cierre de la Parte 6 | Ídem, sobre las sesiones 11 y 12 (autenticación, roles y modo pánico) | 10 hallazgos: 6 corregidos y 4 documentados |
+| `/security-review` | Cierre de la Parte 6 | Buscar vulnerabilidades en la autenticación y la autorización | Sin vulnerabilidades de alta confianza |
 
-Las cuatro corren en un subproceso aparte (no comparten el contexto de la sesión). En el resto de las sesiones no se
+Las seis corren en un subproceso aparte (no comparten el contexto de la sesión). En el resto de las sesiones no se
 usó ninguna skill.
 
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
 correr la colección de Postman, **Docker Compose**, **Jest** y pruebas de mutación hechas a mano.
 
-Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9, 10 y
+Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9, 10, 11, 12 y
 las revisiones). Esfuerzo alto en todo, salvo la sesión 8 (planificación de las Partes 5 a 8), que fue extra alto.
 
 ---
@@ -775,3 +777,180 @@ mayúsculas invalida y el ranking no se parte. Newman, dos corridas: 96 asercion
 mitad de un reporte lo termina y sale con código 0.
 
 **Pendiente:** el OK del estudiante para el merge de `develop` a `main` y el mensaje al profesor.
+
+---
+
+## Sesión 11 — Auth0 y middleware JWT · 2026-10-30
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (la misma sesión que las 9 y 10; el plan sugería Opus 5.5 para esta sesión por
+  ser seguridad, pero el estudiante siguió con Sonnet).
+- **Modo:** implementación, en `feature/sesion-11-auth0-jwt`.
+- **Herramientas:** edición de archivos, `npm install jose`, Docker Compose, `curl`, Newman y pruebas de mutación a mano. Sin skills
+  ni subagentes (el `/code-review` y el `/security-review` de cierre de la Parte 6 van en la sesión 12). Docker Desktop estaba apagado
+  (la compu se reinició): Claude lo prendió.
+
+**Qué se hizo**
+- [src/seguridad/verificadorJwt.ts](src/seguridad/verificadorJwt.ts): verifica el JWT con `jose` (firma con las JWKS, solo `RS256`,
+  `iss`, `aud`, `exp`, `nbf`, `sub`) y devuelve `{ sub, roles }`. 401 si el token es inválido o venció; 503 si no se pueden bajar las claves.
+- [src/middlewares/autenticacion.ts](src/middlewares/autenticacion.ts): exige `Authorization: Bearer <token>`, deja al usuario en la
+  petición y responde 401 con `WWW-Authenticate`. Todo `/api` pasa por él; `/salud` sigue público. `GET /api/yo` muestra quién es el usuario.
+- [src/seguridad/autenticacion.ts](src/seguridad/autenticacion.ts): el cableado con `createRemoteJWKSet` (claves en memoria, 3 s de
+  tiempo máximo, descarga como mucho cada 30 s ante un `kid` desconocido).
+- Variables `AUTH_ISSUER`, `AUTH_AUDIENCE`, `AUTH_JWKS_URL`, `AUTH_CLAIM_ROLES`; [AUTH0.md](AUTH0.md) con la guía paso a paso.
+- [herramientas/idpFalso.ts](herramientas/idpFalso.ts) (`npm run idp:falso`): proveedor de identidad falso para desarrollo.
+- Postman: autenticación a nivel de colección, `T1`–`T3` (piden los tokens) y 4 requests de 401; entornos de ejemplo y del proveedor falso.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| Auth0 (opción B) | Estudiante (sesión 8) | Es la recomendada por la letra |
+| La API solo **verifica**; no emite tokens ni guarda usuarios | Claude (según el plan) | Es lo que significa delegar la autenticación |
+| Algoritmo fijo `RS256` | Claude | Sin lista cerrada, `alg: none` o la confusión HS256/RS256 podrían pasar |
+| 503 (y no 401) si no se pueden bajar las claves | Claude | Es una falla del proveedor, no del cliente |
+| El mensaje de un token inválido no dice qué falló; el de uno vencido sí | Claude | Lo primero no ayuda a un atacante; lo segundo le sirve al cliente legítimo para renovarlo |
+| Los roles se leen de un claim configurable; los que no se conocen se descartan | Claude | No se ata la app a Auth0 ni se confía en roles inventados |
+| Un usuario autenticado **sin roles** es válido (queda para la autorización decidir qué puede hacer) | Claude | La autenticación solo dice *quién* es |
+| Proveedor de identidad falso como herramienta de desarrollo, fuera de `src/` y de la imagen | Claude, **a validar** | Permite probar de punta a punta, y correr Newman y k6 después, sin cuenta externa ni credenciales en el repo. Se puede borrar sin tocar nada más |
+| El entorno de Postman con credenciales reales no se versiona (hay un `.ejemplo`) | Claude | Tiene contraseñas |
+
+**Verificación**
+- `npm run check` y `npm test`: 26 suites, **310 tests** en verde (58 nuevos: verificador y middleware, con claves generadas al momento, sin red).
+- Mutaciones (6): sin `issuer`, sin `audience`, tolerancia de reloj enorme, roles sin filtrar, token vencido como 503 y error de red como 401 → las 6 detectadas.
+- Con la API real y el proveedor falso: sin token 401 con `WWW-Authenticate`; token basura, vencido, con esquema `Basic` y con el cuerpo
+  alterado (se hacía pasar por ADMIN) → 401; token válido → 200; `/salud` público; rutas inexistentes dan 404 con token y 401 sin él.
+- **Proveedor caído:** una API que ya tenía las claves en memoria sigue autenticando (200); una que nunca las bajó responde 503 en 21 ms,
+  y sin token o con basura sigue dando 401.
+- Latencia de una petición autenticada con las claves en memoria: ~4 ms.
+- Newman con el proveedor falso, dos corridas: **111 aserciones, 0 fallas** (una corrida previa falló solo en un request de precio por el límite 429 de CoinGecko).
+- Docker: los cinco servicios `healthy` con los valores de ejemplo de Auth0 en el `.env`; sin token → 401.
+
+**Hallazgos**
+- `pm.sendRequest` de Postman **no hereda** la autenticación de la colección: el request de limpieza daba 401 en sus `DELETE` y dejaba
+  datos viejos. Se le manda el token a mano.
+- Con la caché de claves de `jose`, si el proveedor falso se reinicia (claves nuevas con el mismo `kid`), la API sigue con las viejas hasta
+  reiniciarse: es el comportamiento normal de la caché y no ocurre con Auth0, que rota sus claves con `kid` distinto.
+
+**Pendientes**
+- ~~El estudiante tiene que crear la cuenta de Auth0 y probar con ella.~~ **Hecho el 2026-10-31** (ver abajo): el estudiante creó el tenant
+  `dev-td5pv7bdpswwexhr` (región US) y la API se probó contra Auth0 real.
+- Siguiente: sesión 12 (roles y autorización, modo pánico y cierre de la Parte 6).
+
+**Verificación con Auth0 real · 2026-10-31**
+- El estudiante creó la cuenta y el tenant y pasó el Client ID de la aplicación Native; Claude completó el `.env` (`AUTH_ISSUER` y
+  `AUTH_JWKS_URL`, comprobados contra `/.well-known/openid-configuration`) y armó el entorno de Postman (fuera de git). La contraseña de
+  los usuarios la escribió el estudiante en el archivo, nunca se la pasó a Claude ni se muestra en ningún informe.
+- **Hallazgo:** el primer pedido de token falló con `Client "..." is not authorized to access resource server`. Faltaba **autorizar la
+  aplicación en la API** (pestaña *Application Access*). La guía lo tenía solo en la tabla de problemas; se agregó como paso 6.5.
+- Resultado: los tres usuarios obtienen su token con el rol correcto (`["AUDITOR"]`, `["TRADER"]`, `["ADMIN"]`), `iss` y `aud` coinciden (la
+  audiencia llega como lista `[api, userinfo]`, que el verificador ya aceptaba) y **Newman con Auth0 real da 111 aserciones, 0 fallas** con la
+  API en Docker: `GET /api/yo` → 200 y los casos de 401 (sin token, inválido y manipulado) → 401.
+- Docker Desktop se apagó otra vez por un reinicio de la compu; Claude lo prendió.
+
+---
+
+## Sesión 12 — Roles, modo pánico y administración · 2026-10-31
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (igual que las sesiones 9 a 11; el plan sugería Sonnet 5.5 para esta).
+- **Modo:** implementación, en `feature/sesion-12-roles-modo-panico`.
+- **Herramientas:** edición de archivos, Docker Compose, `curl` con **tokens reales de Auth0**, Newman y mutaciones a mano. Sin skills ni
+  subagentes (la revisión de cierre va en la entrada siguiente). Docker Desktop estaba apagado y Claude lo prendió.
+
+**Qué se hizo**
+- **Autorización por roles (RBAC):** [src/seguridad/autorizar.ts](src/seguridad/autorizar.ts) (403, con log de cada acceso denegado) y la matriz
+  declarada en [src/seguridad/permisos.ts](src/seguridad/permisos.ts); cada ruta de [activosRutas.ts](src/rutas/activosRutas.ts) declara su permiso.
+- **Modo pánico:** [src/seguridad/modoPanico.ts](src/seguridad/modoPanico.ts), `SET modo_panico true` en Redis; bloquea las escrituras de
+  TRADER y AUDITOR con 403, no bloquea al ADMIN, y falla cerrado (503) si no puede leer Redis.
+- **Administración (solo ADMIN):** `DELETE /api/admin/cache` (`SCAN` + borrar solo `activo:*`) y `GET`/`PUT /api/admin/modo-panico`.
+- **Preferencias por usuario** (`preferencias:<sub>`) y el `sub` del usuario en `metadatos.usuario` de la auditoría del CRUD y de los reportes.
+- Un **test de contrato** ([pruebas/rutas/permisosDeRutas.test.ts](pruebas/rutas/permisosDeRutas.test.ts)) que falla si una ruta no declara su permiso o declara otro.
+- Postman: tokens por rol en los requests existentes, `T4` (apaga el modo pánico por si una corrida quedó a medias) y 19 casos nuevos de
+  permisos, modo pánico y preferencias por usuario. README y [RESPUESTAS-PARTE-6.md](RESPUESTAS-PARTE-6.md).
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| Matriz: el AUDITOR lee todo, **incluida** la auditoría general; el TRADER **no** ve la auditoría general ni las estadísticas | Claude, según el plan (a validar) | La letra dice que el AUDITOR consulta el historial; el TRADER "no accede a procesos administrativos" |
+| `POST /api/activos/analizar` solo para TRADER y ADMIN, y **no** se bloquea en modo pánico | Claude | Es un `POST` pero no guarda nada: la letra pide bloquear los endpoints de **escritura** |
+| El ADMIN nunca se bloquea en modo pánico, ni siquiera se consulta Redis para él | Claude | Tiene que poder operar y apagar el modo |
+| El modo pánico **falla cerrado** (503 si no se puede leer) | Claude | Ante la duda durante un incidente no se escribe |
+| Limpiar la caché borra solo `activo:*`, con `SCAN`; nunca `FLUSHALL` | Claude | Redis guarda también la cola, las preferencias, los contadores y el modo pánico |
+| 403 y no 404 para lo que el rol no permite | Claude | El usuario está autenticado; ocultar con 404 confundiría al cliente legítimo |
+| Un usuario autenticado sin roles recibe 403 en todo menos `/yo` | Claude | La autenticación dice *quién*; sin rol no tiene permiso para nada |
+| La clave `preferencias:billetera` quedó huérfana al pasar a preferencias por usuario | Claude | Eran datos de desarrollo; no se migraron |
+| Quién activó el modo pánico / limpió la caché va al **log**, no a MongoDB | Claude | Alcance de la sesión; queda como mejora |
+
+**Verificación**
+- `npm run check` y `npm test`: 30 suites, **385 tests** en verde (73 nuevos: autorización por rol, modo pánico, limpieza de caché, permisos de las
+  rutas y preferencias por usuario).
+- Mutaciones (6): autorización que deja pasar a todos, el ADMIN también se bloquea, el modo pánico falla **abierto**, limpiar la caché borra todo
+  Redis, `/estadisticas` abierta a todos y `DELETE` sin bloqueo de modo pánico → las 6 detectadas.
+- **Con tokens reales de Auth0 (los tres usuarios)**, matriz de 12 endpoints × 3 roles: **todas las celdas coinciden con lo esperado**. Sin token → 401.
+- **Modo pánico:** el TRADER recibe 403 en `POST`, `PUT`, `DELETE` y `PUT /preferencias`; `GET` y `analizar` siguen en 200; el ADMIN sigue escribiendo
+  (201); `redis-cli get modo_panico` da `true`; al apagarlo el TRADER vuelve a escribir.
+- **Con Redis detenido:** TRADER `POST` → 503 (no deja escribir), ADMIN `POST` → 201, TRADER `GET` → 200; al volver Redis se recupera solo.
+- **Preferencias por usuario:** el TRADER guarda UYU/777 y el ADMIN sigue viendo USD/100000; hay una clave por usuario.
+- **Limpiar la caché:** borró 1 entrada `activo:*` y dejó intactas las claves `preferencias:*` (3), `bull:*` (10), `estadisticas:*` (1) y el ranking.
+- **Auditoría:** los `CREAR` y `ACTUALIZAR` en MongoDB traen `metadatos.usuario` con el `sub` de quien los hizo.
+- Newman con **Auth0 real**, dos corridas: 70 requests, 147 y 146 aserciones, **0 fallas**.
+
+**Hallazgos**
+- Mi Redis falso recorría `SCAN` con un índice como cursor y se saltaba claves al borrar a mitad del recorrido (el `SCAN` real no lo hace). Lo
+  encontró un test y se corrigió el falso; no era un bug de la aplicación.
+- **Un token de Auth0 dura 24 horas** en este tenant: un cambio de rol o un bloqueo no se nota hasta que el token vence. Limitación documentada.
+- Git Bash convierte `/ruta` en una ruta de Windows con `MSYS_NO_PATHCONV` y rompe `-o /dev/null`: es un detalle de mis scripts de prueba.
+
+**Pendientes**
+- Cierre de la Parte 6: `/code-review` y `/security-review`, correcciones, OK del estudiante, merge a `main`.
+- A validar por el estudiante: la matriz de permisos (en especial que el TRADER no vea la auditoría general).
+
+---
+
+## Revisión de la Parte 6 · 2026-10-31
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
+- **Skills usadas:** `/code-review` en nivel *high* y `/security-review`, sobre lo que `develop` tenía de más que `main` (sesiones 11 y 12).
+  Las correcciones se hicieron en `fix/revision-parte-6`.
+
+### `/code-review` · 10 hallazgos
+
+| # | Hallazgo | Decisión |
+|---|---|---|
+| 1 | `express.json()` corría antes de `autenticar`: a un anónimo se le parseaba el cuerpo (y con JSON roto recibía 400, no 401) | **Corregido:** el parser va después de autenticar. Verificado con la API real: sin token, JSON roto → 401 |
+| 2 | Todo error que no fuera de `jose` se traducía a 503 "el proveedor no responde", escondiendo un bug propio | **Corregido:** solo se marca como fallo del proveedor lo que falla al pedir la clave; el resto sale como 500 con su stack. Test nuevo |
+| 3 | Con el proveedor caído y sin claves en memoria cada petición espera hasta 3 s (no hay caché negativa) | **Documentado** (en el código, el README y `RESPUESTAS-PARTE-6.md`). Un cortacircuitos delante de `jose` podría bloquear también las claves que sí están en memoria |
+| 4 | El modo pánico falla cerrado y consulta Redis en cada escritura: una caída breve de Redis da 503 a las escrituras de TRADER | **Documentado:** es el compromiso elegido (rechazar ante la duda). Se agregó la advertencia al README |
+| 5 | `describir()` duplicaba `describirError` | **Corregido** |
+| 6 | La clave `preferencias:billetera` quedó huérfana al pasar a preferencias por usuario | **No se corrige:** eran datos de desarrollo y ya estaba documentado; se borró la clave del Redis local |
+| 7 | `solicitadoPor` era obligatorio pero los trabajos ya encolados antes de la Parte 6 no lo traen | **Corregido:** pasó a opcional, con tests |
+| 8 | Los accesos denegados se logueaban como `info`; se dijo que `req.path` permitía inyectar líneas | Nivel **corregido a `warn`** (se agregó `warn` al registrador). **La inyección no aplica:** `req.path` de Express llega sin decodificar |
+| 9 | `idpFalso` aceptaba `__proto__` o `constructor` como usuario y un `vence_en` no numérico daba 500 | **Corregido** (`Object.hasOwn` y validación) |
+| 10 | `PUT /preferencias` se bloquea en modo pánico y el AUDITOR nunca puede guardar sus preferencias | **No se corrige:** la letra pide bloquear **todas** las escrituras y que el AUDITOR no modifique nada |
+
+**Hallazgo extra, no marcado por la revisión:** al probar el punto 1 con un cuerpo de 1 MB, la API daba **500** en lugar de 413 (defecto anterior:
+el manejador de errores solo conocía el JSON roto). Se corrigió: 413 para un cuerpo demasiado grande y 415 para un tipo de contenido no soportado.
+
+### `/security-review` · sin vulnerabilidades de alta confianza
+
+Revisó la verificación del JWT (firma, algoritmo `RS256` fijo, `iss`, `aud`, `exp`), que `autenticar` va antes que todas las rutas, la matriz de roles
+y su test de contrato, el modo pánico, las preferencias por usuario, la limpieza de caché con `SCAN` (patrón fijo `activo:*`), las claves de Redis
+armadas con datos del cliente, la fuga de información en logs y respuestas y la herramienta del proveedor falso. Dos observaciones menores, ya
+documentadas como limitaciones: los roles viajan en el token (un cambio de rol se nota recién cuando vence, 24 h) y la espera de 3 s con el
+proveedor caído y sin claves en memoria. La consigna de la skill está en inglés; el informe se entregó en español.
+
+**Verificación:** `check` y **388 tests** en verde (3 nuevos); con la API real: sin token + JSON roto → 401, con token + JSON roto → 400, con token + 1 MB → 413.
+
+**Pendiente:** el OK del estudiante para el merge de `develop` a `main` (cierre de la Parte 6).
+
+---
+
+## Partes 5 y 6 en `main` · 2026-10-30 y 2026-11-04
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
+- **Parte 5 (2026-10-30):** el estudiante dio el OK después del `/code-review`; se hizo el merge `--no-ff` de `develop` a `main` y el push. Había 252 tests y
+  Newman con 0 fallas.
+- **Parte 6 (2026-11-04):** el estudiante respondió "vamos sigamos" a la pregunta "¿hago el merge de la Parte 6 a `main` y seguimos con la sesión 13?", y se
+  hizo el merge. Estado al cerrar: `check` y 388 tests en verde, Newman con Auth0 real con 0 fallas, `/code-review` y `/security-review` hechas y registradas.
+- Los commits de ambas partes no llevan `Co-Authored-By` ni mención a Claude.
+- **Siguiente:** sesión 13 (CQRS: comandos, consultas y publicación de eventos), en `feature/sesion-13-cqrs`.
