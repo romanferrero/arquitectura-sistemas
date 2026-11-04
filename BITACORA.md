@@ -942,3 +942,15 @@ proveedor caído y sin claves en memoria. La consigna de la skill está en ingl�
 **Verificación:** `check` y **388 tests** en verde (3 nuevos); con la API real: sin token + JSON roto → 401, con token + JSON roto → 400, con token + 1 MB → 413.
 
 **Pendiente:** el OK del estudiante para el merge de `develop` a `main` (cierre de la Parte 6).
+
+---
+
+## Partes 5 y 6 en `main` · 2026-10-30 y 2026-11-04
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
+- **Parte 5 (2026-10-30):** el estudiante dio el OK después del `/code-review`; se hizo el merge `--no-ff` de `develop` a `main` y el push. Había 252 tests y
+  Newman con 0 fallas.
+- **Parte 6 (2026-11-04):** el estudiante respondió "vamos sigamos" a la pregunta "¿hago el merge de la Parte 6 a `main` y seguimos con la sesión 13?", y se
+  hizo el merge. Estado al cerrar: `check` y 388 tests en verde, Newman con Auth0 real con 0 fallas, `/code-review` y `/security-review` hechas y registradas.
+- Los commits de ambas partes no llevan `Co-Authored-By` ni mención a Claude.
+- **Siguiente:** sesión 13 (CQRS: comandos, consultas y publicación de eventos), en `feature/sesion-13-cqrs`.
