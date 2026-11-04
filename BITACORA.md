@@ -25,7 +25,7 @@ usó ninguna skill.
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
 correr la colección de Postman, **Docker Compose**, **Jest** y pruebas de mutación hechas a mano.
 
-Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9, 10, 11, 12 y
+Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9 a 13 y
 las revisiones). Esfuerzo alto en todo, salvo la sesión 8 (planificación de las Partes 5 a 8), que fue extra alto.
 
 ---
@@ -954,3 +954,60 @@ proveedor caído y sin claves en memoria. La consigna de la skill está en ingl�
   hizo el merge. Estado al cerrar: `check` y 388 tests en verde, Newman con Auth0 real con 0 fallas, `/code-review` y `/security-review` hechas y registradas.
 - Los commits de ambas partes no llevan `Co-Authored-By` ni mención a Claude.
 - **Siguiente:** sesión 13 (CQRS: comandos, consultas y publicación de eventos), en `feature/sesion-13-cqrs`.
+
+---
+
+## Sesión 13 — CQRS: comandos, consultas y eventos · 2026-11-04
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (igual que las sesiones 9 a 12; el plan sugería Sonnet 5.5 para esta).
+- **Modo:** implementación, en `feature/sesion-13-cqrs`.
+- **Herramientas:** edición de archivos, Docker Compose, `curl` con **tokens reales de Auth0**, `redis-cli subscribe`, `SHOW GLOBAL STATUS` de MySQL,
+  Newman y mutaciones a mano. Sin skills ni subagentes. Antes de empezar se cerró la Parte 6 en `main` (ver la entrada anterior).
+
+**Qué se hizo**
+- **El servicio de activos se partió en dos**, cada uno una fábrica con todo por parámetro: [comandos](src/servicios/comandos/crearComandosActivos.ts)
+  (crear, actualizar, eliminar: validan, persisten en MySQL, invalidan la caché, auditan y publican) y
+  [consultas](src/servicios/consultas/crearConsultasActivos.ts) (listar, ver, precio e historial: leen de Redis y caen a MySQL). `activosServicio.ts` se eliminó.
+- **El modelo de lectura se completó:** `GET /api/activos` ahora también sale de Redis (`activos:todos`, con TTL) y lleva `X-Cache`. El filtro `?simbolo=` se
+  aplica sobre la lista cacheada, y el activo de `/precio` sale del modelo de lectura.
+- **Eventos:** [contrato versionado](src/eventos/eventoActivo.ts) (Zod: `ACTIVO_CREADO`, `ACTIVO_ACTUALIZADO`, `ACTIVO_ELIMINADO`, con `antes`, `despues`, campos
+  modificados y quién lo hizo) y [publicador](src/eventos/crearPublicador.ts) sobre `PUBLISH activos-actualizaciones`, de mejor esfuerzo.
+- `SimboloDuplicadoError` pasó a un módulo propio (sin Sequelize) para poder probar los comandos sin base. Limpiar la caché también borra `activos:todos`.
+- Postman: 6 requests nuevos del modelo de lectura (`MISS` y `HIT` de la lista tras un comando). README con la sección "CQRS: comandos, consultas y eventos".
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| Los comandos **siguen** invalidando la caché y auditando directamente en esta sesión | Claude, según el plan | Nadie escucha todavía el canal: la app tiene que quedar funcionando. En la sesión 14 lo hacen los suscriptores |
+| Publicar es de mejor esfuerzo: nunca rechaza y la operación responde bien aunque falle | Claude | MySQL ya confirmó y no se puede deshacer; mismo criterio que la caché y la auditoría del CRUD |
+| El evento se publica **después** de la auditoría y de invalidar la caché, y se valida antes de publicar | Claude | Nunca se anuncia algo que no ocurrió; un evento que viole el contrato sería un bug nuestro y los suscriptores lo descartarían |
+| La lista completa se cachea como un solo valor y el filtro se aplica en memoria | Claude | El portafolio es chico; un solo `GET` de Redis sirve cualquier filtro |
+| `GET /api/activos/:id/precio` usa el activo del modelo de lectura; la cotización nunca se cachea | Claude | El activo es un dato propio que cambia por comandos; la cotización es de un tercero |
+| El log del publicador es `info` aunque haya 0 receptores | Claude | En esta etapa nadie escucha y un `warn` por cada escritura sería ruido; la sesión 14 lo revisa cuando haya suscriptores |
+| El contrato lleva `version` | Claude | Si cambia la forma del mensaje, los suscriptores pueden distinguirlo |
+
+**Verificación**
+- `npm run check` y `npm test`: 34 suites, **452 tests** en verde (64 nuevos: contrato del evento, publicador, comandos, consultas, lista cacheada y administración).
+- Mutaciones (10): el `DELETE` sin evento, el `POST` sin invalidar la lista, el `PUT` sin los campos modificados, publicar antes de confirmar en MySQL,
+  un `ACTIVO_CREADO` sin `despues` que pasa el contrato, publicar sin validar, un publicador que rechaza si Redis falla, un filtro por símbolo que no filtra,
+  limpiar la caché sin borrar la lista y una lista que no vence → las 10 detectadas.
+- **Con Auth0 real y Docker:** la lista da `MISS, HIT, HIT` (y el filtro sale de la misma lista cacheada, TTL 58 s); un comando la invalida y la siguiente lectura
+  vuelve a ser `MISS`.
+- **`redis-cli subscribe` en vivo:** un `POST`, un `PUT` y un `DELETE` produjeron 3 mensajes con el contrato (`ACTIVO_CREADO`, `ACTIVO_ACTUALIZADO` con
+  `camposModificados: [cantidad, precioCompra]` y `ACTIVO_ELIMINADO`), con `version`, `idEvento` y el `sub` del usuario. El log de la API dice `receptores: 1`
+  con el suscriptor conectado y `receptores: 0` sin él.
+- **Carga sobre MySQL (`Com_select`), 100 lecturas de `GET /api/activos`:** **0** consultas con Redis como modelo de lectura contra **100** sin Redis.
+- **Redis detenido:** el ADMIN crea un activo y responde 201 (la caché y el evento fallan y quedan en el log, la lista se sirve desde MySQL); el TRADER recibe 503,
+  porque el modo pánico de la Parte 6 falla cerrado. Al volver Redis todo se recupera solo.
+- Newman con Auth0 real, dos corridas: 76 requests, **161 aserciones, 0 fallas**.
+
+**Hallazgos**
+- Mi primer guion esperaba un 201 del TRADER con Redis caído y dio 503: no es un error de esta sesión, es la regla de la Parte 6 (el modo pánico falla cerrado).
+  Para ver el mejor esfuerzo hay que usar al ADMIN, que no se bloquea. Queda anotado en el README.
+- La API ahora publica un evento por cada escritura aunque **nadie escuche** (`receptores: 0`): la pérdida de ese evento es silenciosa. La sesión 14 lo trabaja
+  (suscriptores, y la comparación con BullMQ que pide el reto de la letra).
+
+**Pendientes**
+- Sesión 14: los **suscriptores** (proyecciones: caché, ranking y auditoría; y notificaciones de Whale Alert), la demostración de la pérdida de mensajes,
+  `RESPUESTAS-PARTE-7.md`, las revisiones y el cierre de la Parte 7.

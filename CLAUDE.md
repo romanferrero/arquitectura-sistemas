@@ -78,4 +78,8 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
   falla si se agrega una ruta sin permiso: **toda ruta nueva tiene que figurar en esa tabla**. Las rutas que escriben llevan
   `...puedeEscribir` (rol + modo pánico). El modo pánico vive en Redis (`modo_panico`) y falla cerrado. El `sub` del usuario va
   a `metadatos.usuario` de la auditoría; las preferencias son por usuario. Limpiar la caché borra solo `activo:*`, nunca `FLUSHALL`.
+- CQRS (Parte 7): lo que **modifica** va en `src/servicios/comandos/` (valida, persiste en MySQL y publica un evento) y lo que **lee** en
+  `src/servicios/consultas/` (Redis primero, MySQL solo si el dato no está). Son fábricas con todo por parámetro y los controladores eligen a cuál llamar.
+  Los eventos de activos viajan por el canal `activos-actualizaciones` con el contrato de `src/eventos/eventoActivo.ts` (versionado, validado al publicar
+  y al recibir). Publicar es de mejor esfuerzo y nunca rechaza. Una escritura nueva tiene que invalidar la entrada y la lista cacheadas.
 - Tests en `pruebas/`, importando `describe`/`test`/`expect` desde `@jest/globals`.

@@ -10,7 +10,7 @@ El plan de las Partes 3 y 4 (ya en `main`) está archivado en [PLAN-PARTES-3-4.m
 - [x] Sesión 10 — BullMQ: cola de reportes, worker y cierre de la **Parte 5** (**Parte 5 en `main`**)
 - [x] Sesión 11 — Auth0 y middleware JWT (JWKS) (probada con Auth0 real el 2026-10-31)
 - [x] Sesión 12 — RBAC, modo pánico y cierre de la **Parte 6** (**Parte 6 en `main`**)
-- [ ] Sesión 13 — CQRS: comandos, consultas y publicación de eventos
+- [x] Sesión 13 — CQRS: comandos, consultas y publicación de eventos
 - [ ] Sesión 14 — Pub/Sub: suscriptores y cierre de la **Parte 7**
 - [ ] Sesión 15 — PM2 cluster, salud, cierre ordenado y monitor de reinicios
 - [ ] Sesión 16 — Pruebas de carga y cierre de la **Parte 8**
