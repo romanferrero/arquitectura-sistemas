@@ -11,6 +11,7 @@
     { "key": "idCache", "value": "" },
     { "key": "idReporte", "value": "" },
     { "key": "intentosSeguimiento", "value": "0" },
+    { "key": "idLista", "value": "" },
     { "key": "urlIdp", "value": "https://TU-TENANT.us.auth0.com" },
     { "key": "audience", "value": "https://portafolio-cripto/api" },
     { "key": "clientId", "value": "CAMBIAR-por-el-client-id-de-la-aplicacion" },
@@ -2531,6 +2532,188 @@
               "const r = pm.response.json();",
               "pm.test('moneda del TRADER, no la del ADMIN', () => pm.expect(r.monedaVisualizacion).to.eql('UYU'));",
               "pm.test('limite del TRADER', () => pm.expect(r.limiteAlertaUsd).to.eql(7500));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "66 - CQRS: un comando (crear) deja vieja la lista cacheada",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"simbolo\": \"LINK\",\n  \"nombre\": \"Chainlink\",\n  \"cantidad\": 50,\n  \"precioCompra\": 14.5\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/activos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 Created', () => pm.response.to.have.status(201));",
+              "pm.collectionVariables.set('idLista', pm.response.json().id);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "67 - CQRS: la primera lectura de la lista va a MySQL (MISS)",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('X-Cache: MISS', () => pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS'));",
+              "pm.test('ya incluye el activo nuevo', () => pm.expect(pm.response.json().map(a => a.simbolo)).to.include('LINK'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "68 - CQRS: la segunda lectura sale de Redis, el modelo de lectura (HIT)",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('X-Cache: HIT', () => pm.expect(pm.response.headers.get('X-Cache')).to.eql('HIT'));",
+              "pm.test('mismo contenido', () => pm.expect(pm.response.json().map(a => a.simbolo)).to.include('LINK'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "69 - CQRS: filtrar por simbolo se hace sobre la lista cacheada (HIT)",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos?simbolo=link",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos?simbolo=link"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('X-Cache: HIT', () => pm.expect(pm.response.headers.get('X-Cache')).to.eql('HIT'));",
+              "pm.test('solo LINK', () => pm.expect(pm.response.json().map(a => a.simbolo)).to.eql(['LINK']));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "70 - CQRS: eliminar tambien invalida la lista",
+      "request": {
+        "method": "DELETE",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos/{{idLista}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos",
+            "{{idLista}}"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "71 - CQRS: tras eliminar, la lista se vuelve a leer de MySQL (MISS) y ya no lo tiene",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/activos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activos"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('X-Cache: MISS', () => pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS'));",
+              "pm.test('LINK ya no esta', () => pm.expect(pm.response.json().map(a => a.simbolo)).to.not.include('LINK'));"
             ]
           }
         }

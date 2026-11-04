@@ -70,6 +70,17 @@ describe("crearServicioAdministracion · limpiarCache", () => {
     expect(clavesQueQuedan(falso).filter((clave) => clave.startsWith("activo:"))).toEqual([]);
   });
 
+  test("también borra la lista completa cacheada (activos:todos), que no empieza con activo:", async () => {
+    const { falso, servicio } = armar();
+    await poblar(falso, 2);
+    await falso.redis.set("activos:todos", "[]", { EX: 60 });
+
+    expect(await servicio.limpiarCache("auth0|admin")).toEqual({ eliminadas: 3 }); // 2 activos + la lista
+
+    expect(clavesQueQuedan(falso)).not.toContain("activos:todos");
+    expect(clavesQueQuedan(falso)).toContain("activos:mas-consultados"); // el ranking NO es cache: queda
+  });
+
   test("usa SCAN con el patrón activo:* y nunca KEYS ni FLUSH", async () => {
     const { falso, servicio } = armar();
     await poblar(falso, 2);

@@ -1,7 +1,7 @@
 # API REST — Portafolio de Criptoactivos
 
 API REST para gestionar un portafolio de criptoactivos, con CRUD completo sobre
-persistencia en MySQL, caché y preferencias en Redis, reportes asíncronos con una cola (BullMQ), autenticación con JWT (Auth0) y control de acceso por roles, integración con APIs externas (cotizaciones y tipo de cambio)
+persistencia en MySQL, caché y preferencias en Redis, reportes asíncronos con una cola (BullMQ), autenticación con JWT (Auth0), control de acceso por roles y CQRS con eventos en Redis Pub/Sub, integración con APIs externas (cotizaciones y tipo de cambio)
 y procesamiento con el patrón **Pipes & Filters**: un pipeline de ingesta para los activos
 nuevos y otro de análisis de riesgo para lotes.
 
@@ -195,7 +195,9 @@ demora las respuestas.
 | Clave | Tipo | Contenido |
 |---|---|---|
 | `activo:<id>` | String + TTL | El activo en JSON |
+| `activos:todos` | String + TTL | La lista completa del portafolio en JSON (la que sirve `GET /api/activos`) |
 | `activos:mas-consultados` | Sorted Set | Id del activo → cantidad de consultas |
+| `activos-actualizaciones` | Canal Pub/Sub (no es una clave) | Los eventos de activos creados, actualizados y eliminados |
 | `preferencias:<sub>` | Hash | `monedaVisualizacion`, `limiteAlertaUsd` de ese usuario |
 | `modo_panico` | String | `"true"` mientras el modo pánico está activo (ver *Roles y modo pánico*) |
 
@@ -393,6 +395,67 @@ Ver el final de [AUTH0.md](AUTH0.md).
 
 ---
 
+## CQRS: comandos, consultas y eventos
+
+**CQRS** (*Command Query Responsibility Segregation*) separa lo que **modifica** datos (comandos) de lo que solo los **consulta** (consultas), cada
+lado con su propio servicio y su propio modelo de datos:
+
+```
+                 ┌── COMANDOS (crear, actualizar, eliminar) ──► MySQL  ──► PUBLISH activos-actualizaciones
+ Controlador ────┤        escritura: la fuente de verdad                     (el evento: "pasó esto")
+                 └── CONSULTAS (listar, ver, precio, historial) ──► Redis ──(si no está)──► MySQL
+                          lectura: el modelo de lectura, sin pasar por la base principal
+```
+
+| | Comandos | Consultas |
+|---|---|---|
+| Qué hacen | Validan, persisten en MySQL y **anuncian** lo ocurrido | Leen. **Nunca** modifican |
+| Dónde | [`servicios/comandos/`](src/servicios/comandos/crearComandosActivos.ts) | [`servicios/consultas/`](src/servicios/consultas/crearConsultasActivos.ts) |
+| Fuente de datos | MySQL (el modelo de escritura) | **Redis** (el modelo de lectura); MySQL solo si el dato no está |
+| Si Redis falla | La operación **se confirma igual** (la caché y el evento son de mejor esfuerzo) | Se lee de MySQL |
+
+**El modelo de lectura.** `GET /api/activos` y `GET /api/activos/:id` (y el activo que usa `/precio`) salen de Redis (`activos:todos` y
+`activo:<id>`). Si no están, se leen de MySQL y se guardan con TTL. El header `X-Cache` lo dice. El filtro `?simbolo=` se aplica sobre la lista
+ya cacheada. Un comando deja vieja la entrada y la lista, y las invalida; el TTL corrige solo lo que se escape.
+
+**El evento.** Después de que MySQL confirma, el comando publica un mensaje en el canal de Redis `activos-actualizaciones`
+([contrato](src/eventos/eventoActivo.ts), validado con Zod en los dos extremos):
+
+```json
+{ "version": 1, "idEvento": "8f509a2c-…", "tipo": "ACTIVO_ACTUALIZADO", "activoId": "…",
+  "antes": { "cantidad": 1, … }, "despues": { "cantidad": 2, … }, "camposModificados": ["cantidad"],
+  "metadatos": { "origen": "API", "usuario": "auth0|…" }, "ocurridoEn": "2026-11-04T12:00:00.000Z" }
+```
+
+`ACTIVO_CREADO` trae `despues`, `ACTIVO_ELIMINADO` trae `antes` y `ACTIVO_ACTUALIZADO` trae los dos más los campos que cambiaron. Se puede ver en vivo:
+
+```bash
+docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning subscribe activos-actualizaciones'
+```
+
+**Publicar es de mejor esfuerzo.** Si Redis no está en ese instante, el evento se pierde (queda en el log) y la operación responde bien igual:
+MySQL ya confirmó y no hay forma de deshacerlo. Además **Pub/Sub no guarda el mensaje**: el log dice cuántos suscriptores lo recibieron
+(`receptores: N`), y con `0` el evento no le llegó a nadie ni se va a reenviar. La solución completa sería un *Transactional Outbox*.
+
+**Cuánto reduce la carga sobre MySQL.** Medido con `Com_select` (el contador de consultas `SELECT` que ve MySQL), con 100 lecturas seguidas de
+`GET /api/activos`:
+
+| | Consultas a MySQL |
+|---|---|
+| Con Redis como modelo de lectura | **0** |
+| Sin Redis (cada lectura va a MySQL) | **100** |
+
+La mayoría del tráfico de una API es de lectura: con este camino la base principal queda para lo que solo ella puede hacer (guardar y garantizar la
+integridad), y las lecturas escalan con Redis, que responde de memoria.
+
+> **Estado:** en esta etapa los comandos todavía dejan la caché al día y registran la auditoría ellos mismos. El paso siguiente de la Parte 7 es
+> que **suscriptores** (procesos aparte) hagan eso al recibir el evento, y dejen al comando en lo que pide el patrón: validar, persistir y publicar.
+
+**Consistencia eventual.** Entre que un comando confirma en MySQL y el modelo de lectura se actualiza hay una ventana en la que una consulta puede
+devolver el dato anterior. Es el precio de CQRS; el TTL (`CACHE_TTL_SEGUNDOS`) acota cuánto puede durar un desfasaje.
+
+---
+
 ## Roles y modo pánico
 
 La autenticación responde *quién sos* (401 si no se sabe); la **autorización** responde *qué podés hacer* (**403** si se
@@ -466,7 +529,7 @@ Todos los de `/api` requieren `Authorization: Bearer <token>` y un **rol** que l
 |---|---|---|---|---|
 | GET | `/salud` | Health check (**público**, sin token) | 200 | — |
 | GET | `/api/yo` | Quién es el usuario del token y qué roles tiene (cualquier usuario autenticado) | 200 | 401 |
-| GET | `/api/activos` | Lista los activos (`?simbolo=BTC` filtra) | 200 | — |
+| GET | `/api/activos` | Lista los activos (`?simbolo=BTC` filtra). Sale de Redis; header `X-Cache: HIT` o `MISS` | 200 | — |
 | GET | `/api/activos/:id` | Obtiene un activo (con caché: header `X-Cache: HIT` o `MISS`) | 200 | 404 |
 | POST | `/api/activos` | Crea un activo | 201 | 400, 409, 502 |
 | PUT | `/api/activos/:id` | Reemplaza un activo | 200 | 400, 404, 409, 502 |
@@ -720,6 +783,7 @@ src/
 │   ├── modelos/activoModelo.ts    # modelo Sequelize de la tabla activos
 │   ├── migraciones/               # cambios de esquema versionados (up / down)
 │   └── migrar.ts, migrarCli.ts    # ejecutor de migraciones (Umzug) y su comando
+├── eventos/                       # contrato del evento (eventoActivo.ts) y publicador de Redis Pub/Sub
 ├── seguridad/                     # verificadorJwt (jose, JWKS), autenticacion, autorizar (roles), modoPanico, permisos (la matriz), usuarioActual
 ├── colas/colaReportes.ts          # la cola de BullMQ vista desde la API (productor)
 ├── reportes/                      # generarReporte, procesadorReporte, eventosWorker, estadoReporte (sin Redis ni bases: dependencias por parámetro)
@@ -730,11 +794,12 @@ src/
 │   └── analisis/                  # depuración → riesgo → formato
 ├── validaciones/activoValidacion.ts
 ├── servicios/
-│   ├── activosServicio.ts         # reglas de negocio del CRUD (usa el pipeline de ingesta)
+│   ├── comandos/                  # lado de ESCRITURA (CQRS): crearComandosActivos (+ el cableado a MySQL, Redis y MongoDB)
+│   ├── consultas/                 # lado de LECTURA (CQRS): crearConsultasActivos, lee de Redis y cae a MySQL
 │   ├── analisisServicio.ts        # usa el pipeline de análisis
 │   ├── crearServicioAuditoria.ts  # registrar (mejor esfuerzo) y consultar el historial
 │   ├── auditoriaServicio.ts       # esa fábrica ya conectada a MongoDB y al logger
-│   ├── crearCacheActivos.ts       # caché cache-aside (String + TTL) y ranking (Sorted Set), de mejor esfuerzo
+│   ├── crearCacheActivos.ts       # modelo de lectura: activo (String + TTL), lista completa y ranking (Sorted Set), de mejor esfuerzo
 │   ├── cacheActivosServicio.ts    # esa fábrica ya conectada a Redis
 │   ├── crearServicioPreferencias.ts, preferenciasServicio.ts   # preferencias (Hash de Redis)
 │   ├── crearServicioReportes.ts, reportesServicio.ts           # pedir y consultar reportes (productor de la cola)
@@ -759,10 +824,11 @@ el repositorio no sabe de negocio.**
 Flujo de una petición:
 
 ```
-Cliente → rutas → controlador → servicio → pipeline de ingesta → repositorio → MySQL
-                                    │            └──→ tasasServicio → API de tipo de cambio
-                                    │            └──→ auditoría → MongoDB (mejor esfuerzo)
-                                    │            └──→ caché → Redis (GET por id; mejor esfuerzo)
+Cliente → rutas → controlador → COMANDOS → pipeline de ingesta → repositorio → MySQL
+                      │              │            └──→ tasasServicio → API de tipo de cambio
+                      │              │            └──→ auditoría → MongoDB (mejor esfuerzo)
+                      │              │            └──→ PUBLISH → Redis Pub/Sub (mejor esfuerzo)
+                      ├────→ CONSULTAS → caché → Redis (modelo de lectura) ··· si no está → MySQL
                                     ├────→ preferencias → Redis
                                     └────→ reportes → cola (BullMQ/Redis) ··· worker → preciosServicio + MongoDB
                                     ├────→ pipeline de análisis (lote → reporte)
@@ -784,7 +850,7 @@ Cualquier throw de ErrorApi → manejadorErrores → { "error": { ... } }
 1. Levantar la API (`npm run dev`).
 2. En Postman: **Import** → seleccionar
    [`postman/portafolio-cripto.postman_collection.json`](postman/portafolio-cripto.postman_collection.json).
-3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 70 de
+3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 76 de
    una sola vez. Los tres primeros (`T1` a `T3`) piden los tokens al proveedor de identidad: hace falta un **entorno**
    (`postman/entorno-local.postman_environment.json.ejemplo` para Auth0, o `postman/entorno-idp-falso.postman_environment.json`
    para el proveedor falso). Ver [AUTH0.md](AUTH0.md). Los requests del reporte necesitan el worker corriendo (`npm run worker` o el compose).
@@ -884,6 +950,11 @@ curl http://localhost:3000/api/ruta-inexistente                           # 404
 | El modo pánico falla cerrado | Si no se puede leer el interruptor se rechazan las escrituras (503): ante la duda, durante un incidente, no se escribe. |
 | Limpiar la caché con `SCAN` + borrado de `activo:*`, nunca `FLUSHALL` | Redis guarda también la cola, las preferencias, los contadores y el modo pánico; vaciarlo todo en un incidente los perdería. |
 | Preferencias por usuario (`preferencias:<sub>`), con el `sub` del token | Nadie puede leer ni cambiar las de otro: el id sale del token verificado, nunca del pedido. |
+| CQRS: servicios de comandos y de consultas separados, con sus dependencias por parámetro | Cada lado se prueba sin MySQL, Redis ni red, y se puede cambiar un modelo sin tocar el otro. |
+| Un comando publica el evento DESPUÉS de confirmar en MySQL, y publicar es de mejor esfuerzo | Nunca se anuncia algo que no ocurrió; y MySQL ya confirmó, así que fallarle al cliente por un evento no tiene sentido. Se paga con eventos que pueden perderse. |
+| El evento tiene un contrato versionado y se valida al publicar y al recibir | Publicador y suscriptores no se conocen, pero comparten esa forma. El canal no garantiza nada de quien escribe en él. |
+| La lista completa se cachea como un solo valor y el filtro por símbolo se aplica en memoria | El portafolio es chico; un solo `GET` de Redis sirve cualquier filtro sin ir a la base. |
+| El precio (`/precio`) toma el activo del modelo de lectura pero nunca cachea la cotización | El activo es un dato propio que cambia por comandos; la cotización es de un tercero y cambia sola. |
 | Autenticación delegada en un proveedor de identidad (Auth0) y la API solo verifica | La API no maneja contraseñas ni sesiones; el token es *stateless*, así que sirve igual con una instancia que con diez (Parte 8). |
 | Algoritmo fijo (`RS256`) y `iss`/`aud`/`exp` obligatorios | Sin la lista cerrada de algoritmos, `alg: none` o la confusión HS256/RS256 podrían pasar. |
 | Los roles se leen de un claim configurable, y los desconocidos se descartan | No se ata la app a un proveedor ni se confía en roles inventados. |
