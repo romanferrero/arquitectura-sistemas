@@ -1,4 +1,6 @@
 import express from "express";
+import { obtenerSalud } from "./controladores/saludControlador.ts";
+import { marcarInstancia } from "./middlewares/instancia.ts";
 import { activosRutas } from "./rutas/activosRutas.ts";
 import { autenticar } from "./seguridad/autenticacion.ts";
 import { manejadorErrores, noEncontrado } from "./middlewares/manejadorErrores.ts";
@@ -12,11 +14,12 @@ import { manejadorErrores, noEncontrado } from "./middlewares/manejadorErrores.t
  */
 export const app = express();
 
-// Health check: sirve para verificar rapido que el contenedor esta vivo. Es PUBLICO: lo usan
+// Antes que nada: toda respuesta (tambien un 401 o un 404) dice que instancia del cluster la atendio.
+app.use(marcarInstancia);
+
+// Health check: comprueba que esta instancia llegue a MySQL, MongoDB y Redis (200 o 503). Es PUBLICO: lo usan
 // Docker y los monitores, que no tienen un token.
-app.get("/salud", (_req, res) => {
-  res.status(200).json({ estado: "ok", fecha: new Date().toISOString() });
-});
+app.get("/salud", obtenerSalud);
 
 // Todas las rutas de la API cuelgan de /api y EXIGEN un token valido (Authorization: Bearer).
 // El middleware va antes que las rutas: sin token no se llega a ningun controlador.

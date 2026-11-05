@@ -7,7 +7,7 @@ El plan vigente (Partes 5 a 8) está en [PLAN.md](PLAN.md); el de las Partes 3 y
 
 ## Resumen: skills y herramientas usadas
 
-Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron siete veces,
+Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron nueve veces,
 siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUDE.md`).
 
 | Skill | Cuándo | Para qué | Resultado |
@@ -19,14 +19,16 @@ siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUD
 | `/code-review` (nivel *high*) | Cierre de la Parte 6 | Ídem, sobre las sesiones 11 y 12 (autenticación, roles y modo pánico) | 10 hallazgos: 6 corregidos y 4 documentados |
 | `/security-review` | Cierre de la Parte 6 | Buscar vulnerabilidades en la autenticación y la autorización | Sin vulnerabilidades de alta confianza |
 | `/code-review` (nivel *high*) | Cierre de la Parte 7 | Ídem, sobre las sesiones 13 y 14 (CQRS, eventos y suscriptores) | 10 hallazgos: 5 corregidos y 5 documentados |
+| `/code-review` (nivel *high*) | Cierre de la Parte 8 | Ídem, sobre las sesiones 15 y 16 (PM2, salud, cierre ordenado, monitor y prueba de carga) | 10 hallazgos: 5 corregidos y 5 documentados |
+| `/security-review` | Cierre de la Parte 8 | Buscar vulnerabilidades en los cambios de PM2, el health check público y la prueba de carga | Sin vulnerabilidades de alta confianza |
 
-Las siete corren en un subproceso aparte (no comparten el contexto de la sesión). En el resto de las sesiones no se
+Las ocho primeras corren en un subproceso aparte (no comparten el contexto de la sesión). En la `/security-review` de la Parte 8 la skill pedía lanzar subtareas y Claude hizo el análisis directamente en la sesión, leyendo el código de los archivos con superficie de ataque (sin subagentes). En el resto de las sesiones no se
 usó ninguna skill.
 
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
 correr la colección de Postman, **Docker Compose**, **Jest** y pruebas de mutación hechas a mano.
 
-Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9 a 14 y
+Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9 a 16 y
 las revisiones). Esfuerzo alto en todo, salvo la sesión 8 (planificación de las Partes 5 a 8), que fue extra alto.
 
 ---
@@ -1109,3 +1111,139 @@ proveedor caído y sin claves en memoria. La consigna de la skill está en ingl�
 Newman con Auth0 real: 81 requests, **162 aserciones, 0 fallas**.
 
 **Pendiente:** el OK del estudiante para el merge de `develop` a `main` (cierre de la Parte 7) y el mensaje para el profesor.
+
+
+---
+
+## Sesión 15 — PM2 cluster, salud, cierre ordenado y monitor de reinicios · 2026-11-05
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el plan sugería Opus 5.5 para esta sesión; el estudiante respondió "dale" sin pedir otro modelo y se siguió con el mismo).
+- **Modo:** implementación, en `feature/sesion-15-pm2`. El estudiante avisó dos veces que se le trabó la computadora; se retomó verificando el estado (todo estaba en commits) y asegurando lo que faltaba.
+- **Antes de empezar:** el estudiante dio el OK ("sigamos") y se hizo el merge de `develop` a `main` (Parte 7, `--no-ff`, sin tags, push). Decidió además mandarle al profesor **un solo mensaje para las Partes 7 y 8**, al cerrar la 8.
+- **Herramientas:** edición de archivos, Docker Compose (16 instancias reales), `pm2 ls`/`jlist` dentro del contenedor, `kill -9`, `pm2 reload` con tráfico en paralelo con **tokens reales de Auth0**, Newman y
+  `npm audit`. Sin skills ni subagentes (las revisiones del cierre de la Parte 8 van en la sesión 16).
+
+**Qué se hizo**
+- **PM2:** [`ecosystem.config.cjs`](ecosystem.config.cjs) con la API en cluster (`instances: "max"`, `autorestart`, `max_memory_restart: 300M`, `wait_ready`), y el worker, los dos suscriptores y el monitor en una instancia cada uno. En Docker cada contenedor corre `pm2-runtime --only <proceso>`.
+- **`GET /salud`:** comprueba MySQL, MongoDB y Redis en paralelo con tope de 2 s; 200 o 503, sin detalle de errores en la respuesta (es pública). Header **`X-Instancia`** en todas las respuestas.
+- **Servidor:** `process.send("ready")`, migra solo si `MIGRAR_AL_ARRANCAR` no es `false`, cierre ordenado con un tope configurable (`SHUTDOWN_TIMEOUT_MS`) y ante `uncaughtException`/`unhandledRejection`, y `/salud` responde 503 mientras se apaga.
+- **Migraciones:** servicio `migraciones` de una sola ejecución; la API y el worker esperan a que termine bien.
+- **Monitor de reinicios:** [`monitorReinicios`](src/procesos/monitorReinicios.ts) + [`crearDetectorInestabilidad`](src/monitoreo/crearDetectorInestabilidad.ts) (ventana deslizante pura): log `[CRÍTICO]` si una instancia reinicia más de 5 veces en un minuto.
+- **Precarga de las claves de Auth0** antes de decir `ready` (con 3 reintentos).
+- `npm audit fix`: se actualizaron zod, body-parser y qs (vulnerabilidades altas y moderadas). Queda `uuid` vía sequelize (moderada, sin arreglo sin bajar de versión).
+- README (sección nueva), `CLAUDE.md`, `.env.example`.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| El endpoint se queda en **`/salud`** (la letra dice `/health`) y ahora comprueba las tres bases | Claude, según la tabla de nombres del plan | Es el nombre ya usado en todo el proyecto; la tabla de nombres lo relaciona |
+| El worker y los suscriptores corren **una** instancia | Claude, según el plan | Con Pub/Sub cada copia de un suscriptor recibiría todos los eventos y el trabajo se duplicaría |
+| `max_restarts: 20` y no 5 | Claude | Con 5, PM2 detendría el ciclo de caídas antes de que el monitor viera más de 5 en un minuto |
+| El monitor lee el **contador de reinicios** de PM2 (sondeo cada 5 s) en vez de escuchar eventos del bus | Claude | El contador cubre todos los motivos de reinicio y no depende de no perder un evento |
+| El detalle de un fallo del health check va al log y no a la respuesta | Claude | El endpoint es público: el mensaje mostraría hosts y puertos internos |
+| El timeout de cierre de la API (10 s) es menor que el `kill_timeout` de PM2 (12 s) | Claude | Para que el cierre ordenado alcance a terminar antes del SIGKILL |
+| Precargar las claves de Auth0 al arrancar, de mejor esfuerzo | Claude | Se vio en el reload con tráfico que el primer pedido autenticado de una instancia nueva recibía 503 si Auth0 tardaba |
+| Un `reload` con 16 instancias **no** se declara de cero fallos | Claude | Se midió y no lo es en esta máquina; se documenta con los números |
+| `PM2_INSTANCES` por defecto `max` en el compose | Claude, según la letra | Es lo que pide la letra; la variable permite bajarlo |
+
+**Verificación**
+- `npm run check`, `npm run build` y `npm test`: 41 suites, **520 tests** en verde (21 nuevos: health check y detector de reinicios).
+- **Cluster real en Docker (16 instancias):** `pm2 ls` con las 16 `online` y el monitor; 400 pedidos a `/salud` repartidos entre 23 y 26 por instancia (header `X-Instancia`, también en un 401). Cada instancia usa entre 70 y 160 MB (unos 2 GB en total, VM de Docker de 3,7 GB). Arrancan de a una: unos 2 minutos para las 16.
+- **`kill -9` de la instancia 0 siete veces seguidas:** PM2 la levantó cada vez (2 a 9 s) y el monitor dejó `[CRÍTICO] … se reinició 7 veces en 60 s (el límite es 5)`.
+- **`pm2 reload api` con 4 clientes autenticados en paralelo:** con **4 instancias**, 467 respuestas 200, **0 conexiones cortadas** y 3 respuestas 503 (Auth0 devolvió algo que no es JSON cuando varias instancias bajaban las claves a la vez). Con **16 instancias** (tres corridas, 2,5 a 3,5 min cada una) hubo entre 0,5 % y 1 % de pedidos fallidos (503 y conexiones cortadas), con la CPU saturada, chequeos de salud que vencían y fallos de red hacia Auth0 y MySQL.
+- **Cierre ordenado:** `docker compose stop worker-reportes` con un reporte en curso → el reporte terminó (`completado`) y el worker salió con código 0; `docker compose stop api` (16 instancias) → 5 s y salida 0.
+- **Newman con Auth0 real y 16 instancias:** dos corridas limpias (80 requests, 161 aserciones, 0 fallas). Una corrida anterior tuvo 3 aserciones fallidas, todas del mismo request de precio por un 502 de CoinGecko (el tercero).
+
+**Hallazgos**
+- **El reload no es "cero fallos" con 16 instancias en esta máquina:** el cuello es la CPU y las conexiones salientes (Auth0, MySQL), no PM2. Con 4 instancias el mecanismo anda limpio. Queda documentado en el README, con la mejora posible (compartir las claves por Redis o seguir usando las viejas si la descarga falla).
+- **Las instancias arrancan de a una** con `wait_ready` (unos 6 s cada una): el contenedor da `healthy` cuando responde la primera, no cuando están las 16.
+- Mi primer reload con tráfico mostró 503 por la descarga de las claves de Auth0 en instancias nuevas: de ahí la precarga.
+- Una vez el guion de prueba dio 503 de salud con MySQL/Mongo/Redis "no respondió en 2000 ms" bajo carga: es la CPU saturada, no un defecto.
+
+**Pendientes**
+- Sesión 16: pruebas de carga con k6 (una instancia contra el cluster), `RESPUESTAS-PARTE-8.md`, `/code-review` + `/security-review` de la Parte 8, merge a `main` y el **mensaje general al profesor** (Partes 7 y 8, como decidió el estudiante).
+
+
+---
+
+## Sesión 16 — Pruebas de carga con k6 y cierre de la Parte 8 · 2026-11-05
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el plan sugería Sonnet 5.5 · alto para esta sesión).
+- **Modo:** implementación, en `feature/sesion-16-carga`. El estudiante apagó Docker Desktop antes de empezar y lo prendió cuando hizo falta; durante la sesión pidió cerrar otro proyecto suyo de Docker que corría en paralelo.
+- **Herramientas:** edición de archivos, Docker Compose, **k6** (imagen `grafana/k6`), `pm2 jlist` y `docker stats` dentro de la VM de Docker, `docker events`, `dmesg` de la VM (`docker run --privileged --pid=host`), Newman con tokens reales de Auth0 y Jest. Los resultados de las skills (`/code-review`, `/security-review`) se anotan abajo cuando se corran.
+
+**Qué se hizo**
+- [`carga/prueba-carga.js`](carga/prueba-carga.js): 100 usuarios virtuales (80 leen `GET /api/activos/:id` desde Redis, 20 hacen `POST` + `DELETE` en USD) durante 30 s, con `setup()` que pide el token de un TRADER (*password grant*, igual que Postman) y siembra 20 activos, y `teardown()` que los borra. Umbrales: p95 < 500 ms, fallas < 1 %, 0 respuestas 5xx. Contadores por instancia (`X-Instancia`) y tasa de `X-Cache: HIT`.
+- Servicio `k6` en el compose (perfil `carga`); variables `CARGA_*` en `.env.example`; los resúmenes van a `carga/resultados/` (ignorada por git).
+- `PM2_MAX_MEMORY` ahora llega al contenedor de la API y su valor por defecto pasa de **300M a 512M**.
+- README (sección *Pruebas de carga*, variables, memoria), [`RESPUESTAS-PARTE-8.md`](RESPUESTAS-PARTE-8.md), `CLAUDE.md`.
+
+**Resultados** (detalle en `RESPUESTAS-PARTE-8.md`; 0 respuestas 5xx y 99,8 a 99,96 % de lecturas desde Redis en todas)
+
+| Instancias | req/s | p95 | Lectura p95 | Escritura p95 |
+|---|---|---|---|---|
+| 1 | 2.695 | 78 ms | 49 ms | 136 ms |
+| 4 | 4.015 | 55 ms | 40 ms | 119 ms |
+| 8 | 4.274 | 54 ms | 42 ms | 155 ms |
+| 16 | **374** | 434 ms | 367 ms | **1,54 s** (no cumple el umbral) |
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| Un solo servicio `k6` con perfil `carga` y `--summary-export` | Claude, según el plan y el laboratorio del profesor | Es el molde del laboratorio y deja los resultados en archivo sin depender de la red |
+| Token de TRADER por *password grant* desde `setup()` (variables `CARGA_*` o `CARGA_TOKEN`) | Claude | Igual que Newman: se prueba con la autenticación real, sin saltearla |
+| Se agregó **8 instancias** a la comparación del plan (1, 4, 16) | Claude | Para tener la curva completa: la meseta entre 4 y 8 se ve recién ahí |
+| **`PM2_MAX_MEMORY` de 300M a 512M** | Claude, a partir de lo medido | Una instancia con todo el tráfico se estabiliza en ~330 MB: con 300M PM2 la reiniciaba sin que hubiera fuga (7 pedidos fallidos) |
+| Se **detuvo** (no se borró) el otro proyecto de Docker | El estudiante lo pidió; Claude lo ejecutó con `docker stop` | Competía por CPU y memoria y alteraba las medidas |
+| Se **cortó y repitió** la medición cuando se detuvo el otro proyecto | Claude | Para que todas las corridas tuvieran las mismas condiciones |
+| Cerrar con `SIGTERM` el `mysqld` huérfano tras el OOM, sin tocar el volumen | Claude | Se verificó antes que era el proceso del contenedor del propio proyecto; después `CHECK TABLE activos` dio OK |
+| **Se recomienda `PM2_INSTANCES=4` en esta máquina**, pero `max` sigue siendo el valor por defecto | Claude | `max` es lo que pide la letra; las mediciones muestran que acá más de 4 no ayuda y con 16 daña |
+| Las capturas de `pm2 monit` las saca el estudiante | Estudiante (según el plan) | Es interactivo; quedan `pm2 jlist` y `docker stats` como respaldo |
+
+**Hallazgos** (todos medidos; ver `RESPUESTAS-PARTE-8.md`, sección 4)
+- **Con 16 instancias bajo carga la máquina no alcanza:** en dos corridas el kernel de la VM mató a MySQL por falta de memoria (`Out of memory: Killed process (mysqld)`) y Docker perdió el rastro del proceso (contenedor en bucle `Restarting (137)`, `mysqld` huérfano bloqueando `ibdata1`). En otra corrida, sin OOM, la prueba se estancó ~25 s (374 req/s, pedidos de hasta 22 s). Dos corridas anteriores, con el otro proyecto prendido y el tope en 300M, habían dado 1.300 a 1.900 req/s sin errores. La causa de la corrida estancada no se pudo determinar (hipótesis: presión de memoria); **el resultado con 16 no es reproducible** en esta máquina.
+- **El rendimiento no escala linealmente:** de 1 a 4 instancias +49 %; de 4 a 8 solo +6 %. El cuello son los recursos compartidos (k6 al 230 % de CPU, MongoDB al 125 %, 3,7 GB de memoria), no el código de la API.
+- **El tope de 300M reiniciaba una instancia sana**; con 4 instancias (cada una a 283–289 MB) estaba al borde.
+- **Mediciones mal hechas y descartadas:** `docker compose run` recreó la API con la configuración por defecto antes de medir (se vio por los contadores `instancia_N`); `up --wait` da la API por lista con la primera instancia; un script de medición que creí detenido seguía corriendo y se pisó con el siguiente. Todo se repitió con verificación del número de instancias, de los reinicios de PM2 y de los contadores por instancia.
+- Falso positivo mío: conté como «reinicios de PM2» las señales `SIGINT` del log de cuando yo paré la API a mano; `pm2 jlist` mostraba 0 reinicios.
+
+**Verificación**
+- `npm run check` y `npm test`: 41 suites, **520 tests** en verde (esta sesión no tocó `src/`).
+- **Newman con Auth0 real y 16 instancias, dos corridas seguidas:** 80 requests, **161 aserciones, 0 fallas**.
+- Stack final: los siete servicios `healthy`/`up`, 16 instancias `online`; MySQL íntegro (`CHECK TABLE activos` OK), el otro proyecto de Docker detenido (no borrado).
+
+**Pendientes**
+- `/code-review` (nivel *high*) y `/security-review` de la Parte 8 (sesiones 15 y 16), con sus arreglos.
+- Las capturas de `pm2 monit` (las saca el estudiante).
+- El OK del estudiante para el merge de `develop` a `main` (cierre de la Parte 8) y el **mensaje general al profesor** (Partes 7 y 8).
+
+---
+
+## Revisión de la Parte 8 · 2026-11-05
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
+- **Skills:** `/code-review` (nivel *high*, sobre `develop` contra `main`, o sea las sesiones 15 y 16) y `/security-review`. Ambas anotadas en la tabla del principio.
+- **Rama:** `fix/revision-parte-8`, mergeada a `develop` con `--no-ff`.
+
+**`/code-review`: 10 hallazgos. Cada uno se verificó leyendo el código antes de decidir.**
+
+| # | Hallazgo | Decisión |
+|---|---|---|
+| 1 | `ecosystem.config.cjs` lee `PM2_INSTANCES`, `PM2_MAX_MEMORY` y `SHUTDOWN_TIMEOUT_MS` de `process.env`, pero el CLI de PM2 no carga el `.env`: con `npm run cluster` se ignoraban y el `kill_timeout` quedaba distinto del tiempo de cierre de la API; además no se validaba el valor | **Corregido:** el archivo carga el `.env` (sin pisar el entorno) y valida `SHUTDOWN_TIMEOUT_MS` con las mismas reglas que `env.ts`; verificado con un `.env` temporal |
+| 2 | El `setup()` de k6 borraba todo activo cuyo símbolo empezara con `LD` o `K` (KSM, KAVA, LDO son reales) | **Corregido:** prefijo `ZZ` **y** nombre propio de la prueba; verificado: los dos activos que había (ETH y ADA) no se tocaron |
+| 3 | `/salud` es público y consulta las tres bases en cada pedido, sin caché | **Documentado** (README y mejoras): con las sondas de Docker no pesa; mejora posible, guardar 1 o 2 s el resultado |
+| 4 | El monitor lanza una lectura a PM2 cada 5 s sin esperar a la anterior ni tiempo máximo: si PM2 no contesta, se apilan | **Corregido:** una sola lectura pendiente a la vez y tope de 4 s. Efecto observado: avisa «PM2 no respondió» mientras arrancan las 16 instancias (4 avisos) y después ninguno |
+| 5 | El detector no rehabilita el aviso cuando un proceso se recupera: un segundo episodio dentro de la ventana se perdía | **Corregido** con un test nuevo (521 tests); mutación manual: sin el arreglo el test falla |
+| 6 | Los handlers de `uncaughtException`/`unhandledRejection` se registran después de `listen`, cierran la instancia y salen con código 1 | **Descartado:** es el diseño de la sesión 15 (cerrar ordenado y que PM2 reinicie limpio); un error durante el arranque ya termina el proceso con código 1 por otro camino |
+| 7 | `env: { NODE_ENV: "production" }` pisa el `NODE_ENV` del `.env` bajo PM2 | **Documentado** con un comentario: es a propósito, solo cambia el formato del log (JSON) |
+| 8 | k6 con la imagen `latest` y resultados en un directorio montado (en Linux el usuario del contenedor puede no poder escribir) | **Corregido** la versión (`grafana/k6:2.3.0`); el permiso en Linux queda en un comentario del compose |
+| 9 | `precargarClaves` puede bloquear el arranque hasta ~11 s por instancia con el proveedor caído | **Documentado** (README): es de mejor esfuerzo por diseño |
+| 10 | `stop_grace_period: 25s` fijo aunque `SHUTDOWN_TIMEOUT_MS` admita hasta 60 s | **Documentado** en el compose, en `.env.example` y en el README |
+
+**`/security-review`:** sin vulnerabilidades de alta confianza. Se examinó lo nuevo con superficie de ataque: `/salud` público (no devuelve el detalle de los errores, solo `ok`/`error` y tiempos, el número de instancia y el `pid`), `X-Instancia`, la precarga de claves (no cambia la verificación del token), el Dockerfile (corre como `node`, el `.env` queda fuera de la imagen por `.dockerignore`), el servicio `k6` y las credenciales de la prueba de carga (solo por variables de entorno, el `.env` está ignorado por git).
+
+**Verificación tras los arreglos:** `check` y **521 tests** en verde (1 nuevo); imagen reconstruida con `docker compose up -d --build --wait`: 16 instancias y el monitor `online`, los siete servicios sanos; corrida liviana de k6 con el script modificado (8.688 pedidos, 0 fallas); Newman con Auth0 real, **dos corridas seguidas: 80 requests, 161 aserciones, 0 fallas**.
+
+**Pendiente:** el OK del estudiante para el merge de `develop` a `main` (cierre de la Parte 8); las capturas de `pm2 monit` (las saca el estudiante); y el **mensaje general al profesor** (Partes 7 y 8).

@@ -40,6 +40,7 @@ cp .env.example .env      # en Windows: copy .env.example .env
 | `npm run migrar:estado` | Lista las migraciones aplicadas y las pendientes |
 | `npm run idp:falso` | Proveedor de identidad falso para desarrollo y pruebas (imita a Auth0, sin cuenta) |
 | `npm run worker` | Levanta el worker de la cola de reportes (en otra terminal, además de `npm run dev`) |
+| `npm run cluster` | La API en **modo cluster de PM2** (una instancia por núcleo, o las de `PM2_INSTANCES`) más el monitor de reinicios; hace falta `npm run build` antes |
 | `npm run suscriptor:proyecciones` | Levanta el suscriptor que deja la caché al día y registra la auditoría al recibir cada evento de activos |
 | `npm run suscriptor:notificaciones` | Levanta el suscriptor de las Whale Alert (avisa cuando una operación supera el límite del usuario) |
 | `npm run db:verificar` | Comprueba que MySQL, MongoDB y Redis respondan con la configuración del `.env` |
@@ -277,16 +278,17 @@ pruebas una caída de Redis tumbaba el proceso y la recuperación no fue limpia;
 
 ```bash
 cp .env.example .env
-docker compose up -d --build --wait     # la API, MySQL, MongoDB y Redis
+docker compose up -d --build --wait     # la API (en cluster), el worker, los suscriptores, MySQL, MongoDB y Redis
 curl http://localhost:3000/salud
 ```
 
-`docker-compose.yml` levanta siete servicios y espera a que estén sanos:
+`docker-compose.yml` levanta ocho servicios (uno, `migraciones`, corre una vez y termina) y espera a que estén sanos:
 
 | Servicio | Imagen | Notas |
 |---|---|---|
-| `api` | La del [`Dockerfile`](Dockerfile) (Node 24, multi-stage, usuario sin privilegios) | Arranca recién cuando MySQL, MongoDB y Redis están `healthy`; aplica las migraciones al iniciar |
-| `worker-reportes` | La misma imagen que `api`, con otro comando | Proceso aparte que consume la cola de reportes. Espera a que la API esté sana (ella aplica las migraciones). Sin puertos |
+| `api` | La del [`Dockerfile`](Dockerfile) (Node 24, multi-stage, usuario sin privilegios) | Corre bajo **PM2 en modo cluster** (ver *PM2, salud y cierre ordenado*). Arranca cuando termina `migraciones` y MongoDB y Redis están `healthy` |
+| `migraciones` | La misma imagen que `api` | Aplica las migraciones de MySQL **una sola vez** y termina: si las aplicara cada instancia del cluster, migrarían 16 a la vez |
+| `worker-reportes` | La misma imagen que `api`, con otro comando | Proceso aparte (bajo `pm2-runtime`, una instancia) que consume la cola de reportes. Espera a que terminen las migraciones. Sin puertos |
 | `suscriptor-proyecciones` | La misma imagen que `api`, con otro comando | Suscriptor del canal `activos-actualizaciones`: deja la caché al día, cuenta el evento y registra la auditoría en MongoDB. Sin puertos; no necesita a la API ni a MySQL |
 | `suscriptor-notificaciones` | La misma imagen que `api`, con otro comando | Otro suscriptor del mismo canal: avisa de las Whale Alert (solo usa Redis). Sin puertos |
 | `mysql` | `mysql:8.4` | Datos en el volumen `mysql_data` |
@@ -352,6 +354,11 @@ Se cargan con el flag **nativo** de Node `--env-file`, sin usar la librería `do
 | `CACHE_TTL_SEGUNDOS` | `60` | Cuánto vive un activo en la caché antes de releerlo de MySQL |
 | `UMBRAL_MONTO_USD` | `100000` | Monto (en USD) que, superado, dispara la *Whale Alert*. Admite 0 |
 | `UMBRAL_VOLATILIDAD` | `80` | Volatilidad (en %) que, superada, marca un activo como `high_risk` |
+| `PM2_INSTANCES` | `max` | Instancias de la API en el cluster: un número o `max` (una por núcleo). Opcional; solo lo usa PM2 |
+| `PM2_MAX_MEMORY` | `512M` | Memoria máxima por instancia antes de que PM2 la reinicie. Opcional |
+| `MIGRAR_AL_ARRANCAR` | `true` | Si la API aplica las migraciones al arrancar. El compose la pone en `false` (las aplica el servicio `migraciones`). Opcional |
+| `SHUTDOWN_TIMEOUT_MS` | `10000` | Cuánto espera la API a los pedidos en curso al apagarse (1000 a 60000). Opcional |
+| `CARGA_TOKEN`, `CARGA_URL_IDP`, `CARGA_CLIENT_ID`, `CARGA_USUARIO`, `CARGA_CLAVE` | (vacías) | Solo para la prueba de carga con k6 (la API no las lee): un token de TRADER, o los datos para pedirlo al proveedor de identidad. Ver *Pruebas de carga* |
 
 Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 (*fail fast*, ver [`src/config/env.ts`](src/config/env.ts)).
@@ -569,6 +576,114 @@ Verificado: después de limpiar, las claves `bull:*`, `preferencias:*`, `estadis
 
 ---
 
+## PM2, salud y cierre ordenado
+
+Para soportar más tráfico y recuperarse de fallas, la API corre bajo **PM2** (el administrador de procesos de Node) en **modo cluster**: PM2 levanta
+varios procesos de la misma API y reparte las conexiones entre ellos, así se aprovechan todos los núcleos de la CPU (un proceso de Node usa uno solo).
+La configuración está en [`ecosystem.config.cjs`](ecosystem.config.cjs) (es `.cjs` porque el proyecto es `"type": "module"` y PM2 lee ese archivo con `require`).
+
+| Proceso | Modo | Instancias | Por qué |
+|---|---|---|---|
+| `api` | cluster | `max` (una por núcleo) | Es lo que recibe el tráfico. El token JWT no guarda sesión y la caché y el modo pánico viven en Redis: da igual qué instancia atienda |
+| `worker-reportes` | fork | 1 | La cola entrega cada reporte a un solo worker; no hace falta multiplicarlo con la API |
+| `suscriptor-proyecciones`, `suscriptor-notificaciones` | fork | 1 cada uno | Con Pub/Sub **cada copia recibiría todos los eventos**: el trabajo se duplicaría |
+| `monitor-reinicios` | fork | 1 | Avisa si una instancia se reinicia demasiado (abajo) |
+
+Lo que define para la API: `autorestart` (si una instancia se cae, PM2 la levanta), `max_memory_restart: 512M` (reinicia la que pasa ese tope: previene fugas),
+`wait_ready` (la instancia cuenta como lista cuando llama a `process.send("ready")`, después de conectar las tres bases y escuchar) y un `kill_timeout` **mayor** que
+lo que la API espera a los pedidos en curso. En Docker cada contenedor corre `pm2-runtime` (la variante de PM2 para contenedores) con `--only <proceso>`; en local,
+`npm run build` y `npm run cluster`. Para comparar con una sola instancia: `PM2_INSTANCES=1`.
+
+### Health check: `GET /salud`
+
+Comprueba **en paralelo** que *esta instancia* llegue a MySQL, MongoDB y Redis (cada una con un tope de 2 s: una base colgada no cuelga el chequeo). Es público.
+
+```json
+{ "estado": "ok", "dependencias": { "mysql": { "estado": "ok", "ms": 4 }, "mongodb": { "estado": "ok", "ms": 3 }, "redis": { "estado": "ok", "ms": 1 } },
+  "instancia": "7", "pid": 212, "uptimeSegundos": 105, "fecha": "2026-11-05T01:36:28.449Z" }
+```
+
+Responde **200** si todo anda y **503** si alguna base no responde (`"estado": "degradado"`) o si la instancia se está apagando (`"cerrando"`). El detalle de un fallo va al
+log y no a la respuesta, porque es público. El healthcheck de Docker usa este endpoint. Todas las respuestas llevan el header **`X-Instancia`** con el número de la instancia que las atendió
+(con 16 instancias, 400 pedidos se repartieron entre 23 y 26 cada una).
+
+### Cierre ordenado (*graceful shutdown*)
+
+Al recibir la señal de apagado (PM2 manda `SIGINT`, Docker `SIGTERM`) cada proceso **deja de aceptar trabajo nuevo, termina lo que tiene en curso y recién entonces cierra las conexiones**:
+
+- **API:** `/salud` pasa a responder 503, se terminan los pedidos en curso (hasta `SHUTDOWN_TIMEOUT_MS`), se cierra la cola de reportes (productor de BullMQ), Redis y las dos bases. Un error que nadie atrapó (`uncaughtException`, `unhandledRejection`) hace el mismo cierre y sale con error, para que PM2 la reinicie limpia.
+- **Worker de reportes:** `worker.close()` espera al **trabajo de BullMQ en curso** antes de salir (hasta 30 s).
+- **Suscriptores:** dejan de escuchar, terminan el evento en curso y cierran Redis y MongoDB.
+
+Verificado con `pm2 reload api` y tráfico autenticado en paralelo: con 4 instancias, 467 pedidos respondieron 200 y **ninguna conexión se cortó**.
+
+### Monitor de reinicios
+
+[`monitor-reinicios`](src/procesos/monitorReinicios.ts) le pregunta a PM2 cada 5 s cuántas veces lleva reiniciado cada proceso y, si alguno reinició **más de 5 veces en un minuto**,
+deja un log de nivel `error` marcado `[CRÍTICO]` en Winston, avisando de una posible inestabilidad:
+
+```
+{"level":"error","message":"[CRÍTICO] Posible inestabilidad en el despliegue: api (instancia 0) se reinició 7 veces en 60 s (el límite es 5)","origen":"MonitorReinicios"}
+```
+
+Se mide con el **contador de reinicios** de PM2 y no con eventos, porque el contador cubre todos los motivos (caída, `max_memory_restart`, reinicio manual) sin depender de que no se pierda un evento. La
+ventana deslizante es una función pura ([`crearDetectorInestabilidad`](src/monitoreo/crearDetectorInestabilidad.ts)) con sus tests. `max_restarts` de PM2 está en 20 **a propósito**: con el límite por defecto del
+ejemplo (5), PM2 detendría el ciclo de caídas antes de que el monitor llegara a verlo. Comprobado matando una instancia con `kill -9` siete veces seguidas: PM2 la levantó cada vez en 2 a 9 s y el 7.º reinicio disparó el log crítico.
+
+### Migraciones en un paso aparte
+
+Con 16 instancias arrancando a la vez no pueden migrar todas. En Docker las aplica el servicio `migraciones` una sola vez y la API (`MIGRAR_AL_ARRANCAR=false`) y el worker esperan a que termine (`service_completed_successfully`). Con `npm run dev` sigue
+migrando al arrancar.
+
+### Qué se midió y qué límites tiene
+
+- **Memoria:** sin tráfico cada instancia usa entre 70 y 160 MB; las 16 suman unos 2 GB. La VM de Docker de esta máquina tiene 3,7 GB: en reposo entra, pero **con 100 usuarios en paralelo no alcanza** (el kernel llegó a matar a MySQL; ver *Pruebas de carga*). Con `max` conviene fijar `PM2_INSTANCES` si la máquina es chica.
+- **`max_memory_restart`:** una instancia que atiende todo el tráfico sube hasta unos 330 MB y se estabiliza, así que el primer tope (300M) la reiniciaba sin que hubiera una fuga (fallaron 7 pedidos). El valor por defecto es ahora **512M**.
+- **Arranque lento:** con `wait_ready` las instancias arrancan **de a una** (unos 6 s cada una); las 16 tardan unos 2 minutos en estar todas. El healthcheck del contenedor da `healthy` cuando responde la primera.
+- **Claves del proveedor de identidad:** cada instancia nueva baja las claves de Auth0 (JWKS). Se **precargan antes de decir `ready`** (con 3 reintentos) para que el primer pedido autenticado no espere. Aun así, si Auth0 responde mal justo cuando varias instancias las bajan a la vez, esos pedidos reciben 503
+  (se vio en el reload: 3 de 470 con 4 instancias; entre 0,5 % y 1 % con 16, donde además la CPU saturada hacía vencer chequeos y conexiones). Una mejora sería compartir las claves por Redis o seguir usando las viejas si la descarga falla.
+- **Un reload con 16 instancias** tardó entre 2,5 y 3,5 minutos (una por una) en esta máquina.
+- **Conexiones a MySQL:** 16 instancias × el pool de 5 de Sequelize = 80 conexiones (el límite del servidor es 151).
+- **`/salud` no tiene caché:** cada pedido hace un `authenticate` a MySQL y un `ping` a MongoDB y a Redis. Con las sondas de Docker (cada 10 s) no pesa, pero como es público cualquiera puede repetirlo, y con la API caída escribe hasta tres líneas de error por pedido. Mejora posible: guardar el último resultado 1 o 2 segundos.
+- **La precarga de claves puede demorar el arranque:** con el proveedor de identidad caído, cada instancia reintenta hasta unos 11 s antes de decir `ready` (y las instancias arrancan de a una). Es de mejor esfuerzo: si no se pueden bajar, la instancia arranca igual.
+- **`SHUTDOWN_TIMEOUT_MS` y Docker:** el `stop_grace_period` del compose (25 s) tiene que ser mayor que `SHUTDOWN_TIMEOUT_MS` + 2 s; si se sube la variable hay que subir también ese valor.
+- **El `.env` y PM2:** `ecosystem.config.cjs` lo carga él mismo (el CLI de PM2 no lo hace), así que `PM2_INSTANCES`, `PM2_MAX_MEMORY` y `SHUTDOWN_TIMEOUT_MS` puestos solo en el `.env` rigen también con `npm run cluster`; una variable ya definida en el entorno gana sobre el `.env`.
+
+## Pruebas de carga (k6)
+
+[`carga/prueba-carga.js`](carga/prueba-carga.js) lanza **100 usuarios virtuales a la vez** durante 30 s contra la API, en dos escenarios paralelos:
+
+| Escenario | Usuarios | Qué hace | Camino |
+|---|---|---|---|
+| `lectura` | 80 | `GET /api/activos/:id` de un activo sembrado al azar | Redis (`X-Cache: HIT`) |
+| `escritura` | 20 | `POST /api/activos` (en USD) y `DELETE` del mismo activo | Pipeline + MySQL + evento publicado |
+
+No hay pausa entre pedidos (cada usuario manda el siguiente apenas recibe la respuesta), así que mide el máximo que aguanta el sistema, no un uso normal. Umbrales: p95 < 500 ms, fallas < 1 %, **0 respuestas 5xx**.
+El `setup()` pide el token de un TRADER (igual que Postman, por *password grant*) y siembra 20 activos (símbolos `ZZS00` a `ZZS19`; los de escritura son `ZZ<usuario>X<vuelta>`); el `teardown()` los borra. Antes de sembrar solo limpia lo que dejó una corrida anterior **de esta prueba** (símbolo con prefijo `ZZ` y su nombre propio): un portafolio con activos reales no se toca. Los contadores `instancia_N` cuentan cuántas respuestas atendió cada instancia (`X-Instancia`) y `tasa_cache_hit` cuántas lecturas salieron de Redis.
+
+```bash
+# Token: o CARGA_TOKEN, o CARGA_URL_IDP / CARGA_CLIENT_ID / CARGA_USUARIO / CARGA_CLAVE en el .env (ver .env.example)
+PM2_INSTANCES=4 docker compose up -d --wait api          # 1, 4, 8 o max
+# esperar a que estén todas online:  docker compose exec api ./node_modules/.bin/pm2 ls
+PM2_INSTANCES=4 ETIQUETA=instancias-4 docker compose run --rm --no-deps k6
+```
+
+Dos detalles que importan: `docker compose run` **recrea la API con la configuración por defecto** (16 instancias) si no se le pasa la misma `PM2_INSTANCES` o `--no-deps`, y `up --wait` da la API por lista cuando responde la **primera** instancia, no cuando están todas (hay que esperar). El resumen de cada corrida queda en `carga/resultados/<ETIQUETA>.json`.
+Para mirar en vivo: `docker compose exec api ./node_modules/.bin/pm2 monit` (interactivo) o `pm2 jlist`, y `docker stats`.
+
+**Resultados** (esta máquina: 16 núcleos, VM de Docker de 3,7 GB; k6, la API, MySQL, MongoDB y Redis comparten los mismos núcleos y la misma memoria; 0 respuestas 5xx y entre 99,8 % y 99,96 % de lecturas desde Redis en todas):
+
+| Instancias | req/s | p50 | p95 | p99 | Lectura p95 | Escritura p95 | CPU de la API |
+|---|---|---|---|---|---|---|---|
+| 1 | 2.695 | 29 ms | 78 ms | 119 ms | 49 ms | 136 ms | 133 % |
+| 4 | 4.015 | 17 ms | 55 ms | 122 ms | 40 ms | 119 ms | 633 % |
+| 8 | 4.274 | 13 ms | 54 ms | 159 ms | 42 ms | 155 ms | 836 % |
+| 16 | **374** | 17 ms | 434 ms | 1,59 s | 367 ms | 1,54 s | 348 % |
+
+Lo que se ve: pasar de 1 a 4 instancias sube el rendimiento un 49 % (no un 300 %); de 4 a 8, un 6 %; y con 16 **empeora**: la corrida se frenó unos 25 s y hubo pedidos de hasta 22 s. Más procesos no son más rendimiento cuando todos comparten los mismos núcleos y la misma memoria con el generador de carga (k6 llegó al 230 % de CPU) y con las bases (MongoDB al 125 % por la auditoría de cada escritura). En otras corridas con 16 instancias el kernel de la VM **mató a MySQL por falta de memoria** (`Out of memory: Killed process (mysqld)`, dos veces) y Docker perdió el rastro de ese proceso; hubo que cerrarlo a mano. Con 16 instancias la API sola ocupa entre 1,4 y 2,1 GB de los 3,7 GB.
+Por eso en esta máquina **se recomienda `PM2_INSTANCES=4`**; `max` sigue siendo el valor por defecto porque es lo que pide la letra.
+El detalle, las limitaciones de la medición y la interpretación están en [`RESPUESTAS-PARTE-8.md`](RESPUESTAS-PARTE-8.md).
+
 ## Nombres: de la letra al proyecto
 
 La letra usa nombres en inglés; el proyecto mantiene todo en español (como en la Parte 3, donde
@@ -582,7 +697,7 @@ La letra usa nombres en inglés; el proyecto mantiene todo en español (como en 
 | Preferencias (`.hSet()` / `.hGetAll()`) | `GET` y `PUT /api/preferencias` |
 | contador atómico (`incr`) | `estadisticas:reportes-exitosos` (`GET /api/estadisticas`) |
 | `GET /assets/:id/history` | `GET /api/activos/:id/historial` |
-| `GET /health` | `GET /salud` |
+| `GET /health` | `GET /salud` (ahora comprueba las tres bases) |
 
 ---
 
@@ -593,7 +708,7 @@ Todos los de `/api` requieren `Authorization: Bearer <token>` y un **rol** que l
 
 | Método | Ruta | Descripción | Éxito | Errores |
 |---|---|---|---|---|
-| GET | `/salud` | Health check (**público**, sin token) | 200 | — |
+| GET | `/salud` | Health check (**público**): comprueba MySQL, MongoDB y Redis, e informa instancia y pid | 200 | 503 |
 | GET | `/api/yo` | Quién es el usuario del token y qué roles tiene (cualquier usuario autenticado) | 200 | 401 |
 | GET | `/api/activos` | Lista los activos (`?simbolo=BTC` filtra). Sale de Redis; header `X-Cache: HIT` o `MISS` | 200 | — |
 | GET | `/api/activos/:id` | Obtiene un activo (con caché: header `X-Cache: HIT` o `MISS`) | 200 | 404 |
@@ -853,7 +968,8 @@ src/
 ├── seguridad/                     # verificadorJwt (jose, JWKS), autenticacion, autorizar (roles), modoPanico, permisos (la matriz), usuarioActual
 ├── colas/colaReportes.ts          # la cola de BullMQ vista desde la API (productor)
 ├── reportes/                      # generarReporte, procesadorReporte, eventosWorker, estadoReporte (sin Redis ni bases: dependencias por parámetro)
-├── procesos/                      # puntos de entrada de los procesos aparte: workerReportes, suscriptorProyecciones, suscriptorNotificaciones (+ ejecutarSuscriptor, lo común)
+├── monitoreo/                     # crearDetectorInestabilidad: la ventana deslizante de reinicios (función pura)
+├── procesos/                      # puntos de entrada de los procesos aparte: workerReportes, suscriptorProyecciones, suscriptorNotificaciones (+ ejecutarSuscriptor, lo común) y monitorReinicios
 ├── pipeline/
 │   ├── pipeline.ts                # runner genérico: Filtro y Pipeline
 │   ├── ingesta/                   # validación → normalización → conversión de moneda
@@ -870,6 +986,7 @@ src/
 │   ├── crearServicioPreferencias.ts, preferenciasServicio.ts   # preferencias (Hash de Redis)
 │   ├── crearServicioReportes.ts, reportesServicio.ts           # pedir y consultar reportes (productor de la cola)
 │   ├── crearServicioEstadisticas.ts, estadisticasServicio.ts   # reportes exitosos (INCR) y ranking
+│   ├── crearServicioSalud.ts, saludServicio.ts   # health check de /salud (MySQL, MongoDB y Redis)
 │   ├── preciosServicio.ts         # llamada a CoinGecko
 │   └── tasasServicio.ts           # llamada a la API de tipo de cambio
 ├── controladores/                 # activos, auditoría, preferencias y reportes
@@ -877,6 +994,8 @@ src/
 ├── errores/ErrorApi.ts
 ├── utilidades/                    # redondear.ts, camposModificados.ts, whaleAlert.ts (la regla de la alerta, compartida)
 └── middlewares/                   # manejadorErrores.ts y autenticacion.ts (Bearer + JWT)
+
+ecosystem.config.cjs               # configuración de PM2: la API en cluster y el resto de los procesos
 
 herramientas/idpFalso.ts           # proveedor de identidad falso (solo desarrollo; no entra en la imagen)
 

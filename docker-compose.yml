@@ -23,41 +23,66 @@ x-entorno-en-docker: &entorno_en_docker
   REDIS_PORT: "6379"
 
 services:
+  # La API, bajo PM2 en MODO CLUSTER: una instancia por nucleo (PM2_INSTANCES=max, o un numero para limitarlas) mas el
+  # monitor de reinicios. Las migraciones NO las aplica: las hace el servicio `migraciones` una sola vez, antes.
   api:
     build: .
     image: portafolio-cripto-api
     # Carga el .env completo y despues pisa lo que cambia dentro de la red de Docker.
     env_file: .env
-    environment: *entorno_en_docker
+    environment:
+      <<: *entorno_en_docker
+      MIGRAR_AL_ARRANCAR: "false"
+      PM2_INSTANCES: ${PM2_INSTANCES:-max}
+      PM2_MAX_MEMORY: ${PM2_MAX_MEMORY:-512M}
     ports:
       - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
     depends_on:
-      mysql:
-        condition: service_healthy
+      migraciones:
+        condition: service_completed_successfully
       mongodb:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # /salud comprueba MySQL, MongoDB y Redis: con una base caida responde 503 y el contenedor pasa a unhealthy.
+    # Con "max" arrancan 16 instancias a la vez y tardan: se da margen antes de contar los fallos.
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:' + process.env.PORT + '/salud').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 60s
+    # `docker compose stop` manda SIGTERM a pm2-runtime, que detiene cada instancia con SIGINT: terminan los pedidos en curso.
+    # Tiene que ser MAYOR que SHUTDOWN_TIMEOUT_MS + 2 s (el kill_timeout de PM2): con el valor por defecto (10 s) alcanza; si se
+    # sube SHUTDOWN_TIMEOUT_MS hay que subir esto tambien, o Docker manda SIGKILL antes de que termine el cierre ordenado.
+    stop_grace_period: 25s
     restart: unless-stopped
 
-  # Worker de la cola de reportes: MISMA imagen que la API, otro comando. Es un proceso aparte:
-  # se puede detener, reiniciar o escalar sin tocar la API. No publica puertos. Espera a que la
-  # API este sana porque ella aplica las migraciones (la tabla `activos` tiene que existir).
-  worker-reportes:
+  # Aplica las migraciones de MySQL UNA vez y termina. La API y el worker esperan a que termine bien
+  # (service_completed_successfully): asi no migran 16 instancias a la vez.
+  migraciones:
     build: .
     image: portafolio-cripto-api
-    command: ["node", "dist/procesos/workerReportes.js"]
+    command: ["node", "dist/datos/migrarCli.js", "subir"]
     env_file: .env
     environment: *entorno_en_docker
     depends_on:
-      api:
+      mysql:
         condition: service_healthy
+    restart: "no"
+
+  # Worker de la cola de reportes: MISMA imagen que la API, otro comando (pm2-runtime con UNA sola instancia). Es un
+  # proceso aparte: se puede detener, reiniciar o escalar sin tocar la API. No publica puertos. Espera a que se
+  # apliquen las migraciones (la tabla `activos` tiene que existir).
+  worker-reportes:
+    build: .
+    image: portafolio-cripto-api
+    command: ["./node_modules/.bin/pm2-runtime", "ecosystem.config.cjs", "--only", "worker-reportes"]
+    env_file: .env
+    environment: *entorno_en_docker
+    depends_on:
+      migraciones:
+        condition: service_completed_successfully
       mysql:
         condition: service_healthy
       mongodb:
@@ -65,7 +90,7 @@ services:
       redis:
         condition: service_healthy
     # `docker compose stop` manda SIGTERM: el worker termina el reporte en curso antes de salir.
-    stop_grace_period: 40s
+    stop_grace_period: 45s
     restart: unless-stopped
 
   # Los dos SUSCRIPTORES del canal `activos-actualizaciones` (Pub/Sub): MISMA imagen que la API, otro comando,
@@ -75,7 +100,7 @@ services:
   suscriptor-proyecciones:
     build: .
     image: portafolio-cripto-api
-    command: ["node", "dist/procesos/suscriptorProyecciones.js"]
+    command: ["./node_modules/.bin/pm2-runtime", "ecosystem.config.cjs", "--only", "suscriptor-proyecciones"]
     env_file: .env
     environment: *entorno_en_docker
     depends_on:
@@ -84,20 +109,55 @@ services:
       redis:
         condition: service_healthy
     # `docker compose stop` manda SIGTERM: termina el evento en curso antes de salir.
-    stop_grace_period: 15s
+    stop_grace_period: 20s
     restart: unless-stopped
 
   suscriptor-notificaciones:
     build: .
     image: portafolio-cripto-api
-    command: ["node", "dist/procesos/suscriptorNotificaciones.js"]
+    command: ["./node_modules/.bin/pm2-runtime", "ecosystem.config.cjs", "--only", "suscriptor-notificaciones"]
     env_file: .env
     environment: *entorno_en_docker
     depends_on:
       redis:
         condition: service_healthy
-    stop_grace_period: 15s
+    stop_grace_period: 20s
     restart: unless-stopped
+
+  # PRUEBA DE CARGA (Parte 8): k6 con 100 usuarios a la vez contra la API. No arranca con `up`: es del perfil `carga`.
+  #   ETIQUETA=cluster-16 docker compose run --rm k6
+  # Pega contra la API por la red de Docker (http://api:PORT) y se autentica con el token de un TRADER: o `CARGA_TOKEN`,
+  # o las variables CARGA_* del .env (ver .env.example), con las que pide el token al proveedor de identidad.
+  # El resumen de cada corrida queda en carga/resultados/<ETIQUETA>.json.
+  k6:
+    # Version fija: un k6 nuevo puede cambiar las opciones o el formato del resumen y romper la medicion documentada.
+    # El resumen se escribe en ./carga/resultados: en Linux el usuario del contenedor (12345) necesita poder escribir ahi
+    # (chmod a+w carga/resultados); en Docker Desktop no hace falta.
+    image: grafana/k6:2.3.0
+    profiles: ["carga"]
+    environment:
+      URL_BASE: http://api:${PORT:-3000}
+      TOKEN: ${CARGA_TOKEN:-}
+      CARGA_URL_IDP: ${CARGA_URL_IDP:-}
+      CARGA_CLIENT_ID: ${CARGA_CLIENT_ID:-}
+      CARGA_USUARIO: ${CARGA_USUARIO:-}
+      CARGA_CLAVE: ${CARGA_CLAVE:-}
+      CARGA_AUDIENCE: ${CARGA_AUDIENCE:-https://portafolio-cripto/api}
+      USUARIOS_LECTURA: ${USUARIOS_LECTURA:-80}
+      USUARIOS_ESCRITURA: ${USUARIOS_ESCRITURA:-20}
+      DURACION: ${DURACION:-30s}
+      PAUSA_MS: ${PAUSA_MS:-0}
+    volumes:
+      - ./carga:/scripts:ro
+      - ./carga/resultados:/resultados
+    command:
+      - run
+      - --summary-trend-stats=avg,med,p(90),p(95),p(99),max
+      - --summary-export=/resultados/${ETIQUETA:-corrida}.json
+      - /scripts/prueba-carga.js
+    depends_on:
+      api:
+        condition: service_healthy
 
   mysql:
     image: mysql:8.4
