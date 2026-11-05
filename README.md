@@ -485,7 +485,10 @@ ni conocen a la API, y se pueden parar, reiniciar o escalar por separado.
   se sigue con el próximo. Los eventos se procesan de a uno y en el orden en que llegaron.
 - **Cierre ordenado.** Con SIGTERM (`docker compose stop`) deja de escuchar, termina el evento en curso y cierra Redis y MongoDB.
 - **Reconexión.** Si Redis se cae y vuelve, el suscriptor se suscribe de nuevo solo (se comprobó reiniciando Redis: el `PUBLISH` siguiente volvió a tener
-  2 receptores). Lo ocurrido mientras estuvo caído **no se recupera**.
+  2 receptores). Lo ocurrido mientras estuvo caído **no se recupera** (el log lo avisa al reconectar).
+- **En local, sin Docker.** `npm run dev` **no** arranca los suscriptores: hay que levantarlos aparte (`npm run suscriptor:proyecciones` y
+  `npm run suscriptor:notificaciones`, cada uno en su terminal). Sin ellos las escrituras funcionan, pero no se invalida la caché ni se audita ni se
+  avisa nada, y la API lo deja como WARN (`receptores: 0`) en cada operación.
 
 #### El reto: ¿qué pasa si el suscriptor está caído? (Pub/Sub vs BullMQ)
 
@@ -505,6 +508,17 @@ publicar con un *Transactional Outbox* para no perder el evento tampoco del lado
 **Consistencia eventual.** Entre que un comando confirma en MySQL y el suscriptor invalida la caché y escribe la auditoría hay una ventana (milisegundos con los
 suscriptores sanos) en la que una consulta puede devolver el dato anterior o el historial puede no tener todavía la operación. Es el precio de CQRS; el TTL
 (`CACHE_TTL_SEGUNDOS`) acota cuánto puede durar un desfasaje si un evento se pierde. Por eso la colección de Postman espera 300 ms antes de cada pedido.
+
+**Limitaciones conocidas** (consecuencias del diseño, no defectos):
+
+- **Leer lo recién escrito.** Un `DELETE` o un `PUT` seguido al instante de un `GET` puede devolver el dato anterior (`X-Cache: HIT`) hasta que el suscriptor
+  invalide la caché; si el suscriptor está parado o el evento se perdió, hasta que venza el TTL.
+- **El historial puede ir atrasado.** Los registros de auditoría los escribe el suscriptor: una operación puede tardar en aparecer, y si el suscriptor estuvo caído
+  **nunca aparece**. En el caso extremo de un activo cuyos eventos nunca se auditaron y que ya se eliminó, `GET /api/activos/:id/historial` responde 404 como si el id
+  nunca hubiera existido.
+- **Orden entre instancias.** El registro se ordena por la hora en que se **publicó** el evento. Si dos `PUT` del mismo activo los atienden instancias distintas, pueden
+  publicarse en otro orden del real y el historial mostrarlos invertidos (el `antes` y el `despues` de cada uno son correctos). Haría falta un número de secuencia por activo.
+- **Sin alarma de eventos sin receptores.** Hoy es un WARN en el log de la API; no hay un chequeo de salud ni una métrica que avise que no hay suscriptores.
 
 ---
 

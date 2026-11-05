@@ -102,6 +102,9 @@ está caído al publicar. Se dejó Pub/Sub porque es lo que pide la letra y porq
 - **Varias instancias de un mismo suscriptor**: con Pub/Sub, cada una recibiría **todos** los eventos y el trabajo se duplicaría (la
   auditoría es idempotente, las notificaciones no). Para escalar un suscriptor haría falta Streams con grupos de consumidores.
 - **Cola de mensajes muertos** (*dead letter*) para los eventos que no cumplen el contrato, en vez de solo descartarlos con un aviso.
+- **Un número de secuencia por activo** en el evento (por ejemplo la versión de la fila), para ordenar el historial aunque los eventos se publiquen desde
+  distintas instancias en otro orden, y para que un suscriptor descarte un evento más viejo que el último que aplicó.
+- **Una alarma por falta de suscriptores** (un chequeo de salud o una métrica con los receptores del último evento): hoy es un WARN en el log.
 - **Evolución del contrato**: hoy un evento de otra versión se descarta; habría que aceptar la actual y la anterior durante un tiempo.
 
 ## 6. ¿Qué dificultades encontraste y cómo las resolviste?
