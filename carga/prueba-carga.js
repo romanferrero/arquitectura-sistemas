@@ -31,6 +31,8 @@ const USUARIOS_ESCRITURA = Number(__ENV.USUARIOS_ESCRITURA || 20);
 const DURACION = __ENV.DURACION || "30s";
 const PAUSA_S = Number(__ENV.PAUSA_MS || 0) / 1000;
 const ACTIVOS_SEMILLA = Number(__ENV.ACTIVOS_SEMILLA || 20);
+const NOMBRE_SEMILLA = "Semilla de carga";
+const NOMBRE_ESCRITURA = "Prueba de carga";
 
 const errores5xx = new Counter("errores_5xx");
 const tasaCacheHit = new Rate("tasa_cache_hit");
@@ -93,6 +95,17 @@ function pedirToken() {
   return respuesta.json("access_token");
 }
 
+/**
+ * Solo se borra lo que dejo una corrida anterior de ESTA prueba: simbolo con el prefijo `ZZ` Y el nombre que ella les pone.
+ * Un portafolio con activos reales (aunque el simbolo empiece igual) no se toca.
+ */
+function esDeLaPruebaDeCarga(activo) {
+  return (
+    String(activo.simbolo).startsWith("ZZ") &&
+    (activo.nombre === NOMBRE_ESCRITURA || String(activo.nombre).startsWith(NOMBRE_SEMILLA))
+  );
+}
+
 /** Antes de empezar: el token, un barrido de lo que haya quedado de otra corrida y los activos que se van a leer. */
 export function setup() {
   const token = pedirToken();
@@ -101,12 +114,12 @@ export function setup() {
   const existentes = http.get(`${URL_BASE}/api/activos`, opciones);
   if (existentes.status !== 200) throw new Error(`No se pudo listar los activos (${existentes.status})`);
   for (const activo of existentes.json()) {
-    if (/^(LD|K)/.test(activo.simbolo)) http.del(`${URL_BASE}/api/activos/${activo.id}`, null, opciones);
+    if (esDeLaPruebaDeCarga(activo)) http.del(`${URL_BASE}/api/activos/${activo.id}`, null, opciones);
   }
 
   const ids = [];
   for (let i = 0; i < ACTIVOS_SEMILLA; i += 1) {
-    const cuerpo = { simbolo: `LD${String(i).padStart(2, "0")}`, nombre: `Semilla ${i}`, cantidad: 1, precioCompra: 100 + i };
+    const cuerpo = { simbolo: `ZZS${String(i).padStart(2, "0")}`, nombre: `${NOMBRE_SEMILLA} ${i}`, cantidad: 1, precioCompra: 100 + i };
     const creado = http.post(`${URL_BASE}/api/activos`, JSON.stringify(cuerpo), opciones);
     if (creado.status !== 201) throw new Error(`No se pudo crear la semilla ${i} (${creado.status}): ${creado.body}`);
     ids.push(creado.json("id"));
@@ -125,10 +138,10 @@ export function leer(datos) {
   if (PAUSA_S > 0) sleep(PAUSA_S);
 }
 
-/** Escenario de escritura: crea un activo con un simbolo propio (K<usuario>X<vuelta>) y lo borra. */
+/** Escenario de escritura: crea un activo con un simbolo propio (ZZ<usuario>X<vuelta en base 36>, hasta 10 caracteres) y lo borra. */
 export function escribir(datos) {
   const opciones = encabezados(datos.token);
-  const cuerpo = { simbolo: `K${__VU}X${__ITER}`, nombre: "Carga", cantidad: 2, precioCompra: 50, moneda: "USD" };
+  const cuerpo = { simbolo: `ZZ${__VU}X${__ITER.toString(36)}`, nombre: NOMBRE_ESCRITURA, cantidad: 2, precioCompra: 50, moneda: "USD" };
 
   const creado = http.post(`${URL_BASE}/api/activos`, JSON.stringify(cuerpo), opciones);
   contarInstancia(creado);
