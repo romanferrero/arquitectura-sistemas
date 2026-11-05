@@ -13,6 +13,8 @@
     "migrar:deshacer": "node --env-file=.env src/datos/migrarCli.ts bajar",
     "migrar:estado": "node --env-file=.env src/datos/migrarCli.ts estado",
     "worker": "node --env-file=.env src/procesos/workerReportes.ts",
+    "suscriptor:proyecciones": "node --env-file=.env src/procesos/suscriptorProyecciones.ts",
+    "suscriptor:notificaciones": "node --env-file=.env src/procesos/suscriptorNotificaciones.ts",
     "idp:falso": "node --env-file=.env herramientas/idpFalso.ts",
     "db:verificar": "node --env-file=.env src/datos/verificarConexiones.ts",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"

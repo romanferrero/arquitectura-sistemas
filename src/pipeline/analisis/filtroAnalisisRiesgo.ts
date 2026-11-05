@@ -1,3 +1,4 @@
+import { esWhaleAlert, montoUsd } from "../../utilidades/whaleAlert.ts";
 import type { Filtro } from "../pipeline.ts";
 import type { ActivoAnalizable, ActivoEvaluado, LoteDepurado, LoteEvaluado, MotivoRiesgo } from "./tipos.ts";
 
@@ -43,10 +44,10 @@ export function crearFiltroAnalisisRiesgo(umbrales: UmbralesRiesgo): Filtro<Lote
 }
 
 function evaluar(activo: ActivoAnalizable, umbrales: UmbralesRiesgo): ActivoEvaluado {
-  const monto = activo.cantidad * activo.precioCompra;
+  const monto = montoUsd(activo);
   const motivosRiesgo: MotivoRiesgo[] = [];
 
-  if (monto > umbrales.montoUsd) motivosRiesgo.push("whale_alert");
+  if (esWhaleAlert(monto, umbrales.montoUsd)) motivosRiesgo.push("whale_alert");
   if (activo.volatilidad !== undefined && activo.volatilidad > umbrales.volatilidad) {
     motivosRiesgo.push("alta_volatilidad");
   }

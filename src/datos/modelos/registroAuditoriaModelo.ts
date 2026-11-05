@@ -12,6 +12,7 @@ export type DocumentoAuditoria = {
   despues?: Record<string, unknown>;
   camposModificados?: string[];
   metadatos?: Record<string, unknown>;
+  idEvento?: string;
   ocurridoEn: Date;
 };
 
@@ -33,6 +34,7 @@ const esquema = new Schema<DocumentoAuditoria>(
     despues: { type: Schema.Types.Mixed, required: false },
     camposModificados: { type: [String], required: false },
     metadatos: { type: Schema.Types.Mixed, required: false },
+    idEvento: { type: String, required: false },
     ocurridoEn: { type: Date, default: Date.now, required: true },
   },
   { collection: "auditoria_activos", versionKey: false },
@@ -45,6 +47,9 @@ const esquema = new Schema<DocumentoAuditoria>(
 esquema.index({ entidadId: 1, ocurridoEn: -1 });
 esquema.index({ ocurridoEn: -1 });
 esquema.index({ operacion: 1, ocurridoEn: -1 });
+// Un evento de Pub/Sub se audita una sola vez: el indice es UNICO, pero solo sobre los documentos que
+// tienen `idEvento` (los del CRUD viejo y los reportes no lo tienen, y no deben chocar entre si).
+esquema.index({ idEvento: 1 }, { unique: true, partialFilterExpression: { idEvento: { $type: "string" } } });
 
 export const RegistroAuditoriaModelo: Model<DocumentoAuditoria> =
   (mongoose.models["RegistroAuditoria"] as Model<DocumentoAuditoria> | undefined) ??

@@ -1,3 +1,4 @@
+import { esErrorDeDuplicado } from "./esErrorDeDuplicado.ts";
 import type { FiltroAuditoria, NuevoRegistroAuditoria, RegistroAuditoria } from "../modelos/auditoria.ts";
 import { documentoARegistro } from "./mapeoAuditoria.ts";
 import type { DocumentoLeido } from "./mapeoAuditoria.ts";
@@ -13,7 +14,29 @@ import { RegistroAuditoriaModelo } from "./modelos/registroAuditoriaModelo.ts";
  */
 
 export async function registrar(registro: NuevoRegistroAuditoria): Promise<void> {
-  await RegistroAuditoriaModelo.create({ ...registro, entidad: registro.entidad ?? "Activo", ocurridoEn: new Date() });
+  const { ocurridoEn, ...resto } = registro;
+  await RegistroAuditoriaModelo.create({
+    ...resto,
+    entidad: registro.entidad ?? "Activo",
+    ocurridoEn: ocurridoEn === undefined ? new Date() : new Date(ocurridoEn),
+  });
+}
+
+/**
+ * Registra un registro que viene de un evento (`idEvento` obligatorio) y es IDEMPOTENTE: si ese evento
+ * ya estaba auditado, el indice unico lo rechaza y aca se devuelve "duplicado" en vez de fallar. Asi
+ * recibir el mismo evento dos veces no duplica el historial.
+ */
+export async function registrarEvento(
+  registro: NuevoRegistroAuditoria & { idEvento: string },
+): Promise<"registrado" | "duplicado"> {
+  try {
+    await registrar(registro);
+    return "registrado";
+  } catch (error) {
+    if (esErrorDeDuplicado(error)) return "duplicado";
+    throw error;
+  }
 }
 
 /** El historial de un activo, del evento mas reciente al mas viejo. No incluye los reportes. */
