@@ -120,6 +120,43 @@ export function cacheTtlSegundos(): number {
   return valor;
 }
 
+/**
+ * Numero de la instancia dentro del cluster de PM2 (0, 1, 2...). PM2 lo pone en NODE_APP_INSTANCE; fuera de PM2
+ * (`npm run dev`) no existe y la instancia es "0". Va en el header `X-Instancia` y en `/salud`.
+ */
+export function instancia(): string {
+  return process.env["NODE_APP_INSTANCE"]?.trim() || "0";
+}
+
+/**
+ * Si la API aplica las migraciones pendientes al arrancar. Por defecto SI (comodo con `npm run dev`). Con varias
+ * instancias arrancando a la vez no conviene que todas migren: en Docker lo hace un paso aparte (el servicio
+ * `migraciones`) y la API corre con `MIGRAR_AL_ARRANCAR=false`.
+ */
+export function migrarAlArrancar(): boolean {
+  const valor = process.env["MIGRAR_AL_ARRANCAR"]?.trim().toLowerCase();
+  if (valor === undefined || valor === "") return true;
+  if (valor === "true") return true;
+  if (valor === "false") return false;
+  console.error("[config] La variable MIGRAR_AL_ARRANCAR debe ser true o false.");
+  process.exit(1);
+}
+
+/**
+ * Cuanto espera la API, al recibir la senal de apagado, a que terminen los pedidos en curso antes de forzar la
+ * salida (en milisegundos). Tiene que ser MENOR que el `kill_timeout` de PM2, que es quien manda el SIGKILL.
+ */
+export function cierreTimeoutMs(): number {
+  const valor = process.env["SHUTDOWN_TIMEOUT_MS"]?.trim();
+  if (valor === undefined || valor === "") return 10_000;
+  const numero = Number(valor);
+  if (!Number.isInteger(numero) || numero < 1_000 || numero > 60_000) {
+    console.error("[config] La variable SHUTDOWN_TIMEOUT_MS debe ser un entero entre 1000 y 60000.");
+    process.exit(1);
+  }
+  return numero;
+}
+
 export const env = Object.freeze({
   PORT: numeroRequerido("PORT"),
   NODE_ENV: textoRequerido("NODE_ENV"),

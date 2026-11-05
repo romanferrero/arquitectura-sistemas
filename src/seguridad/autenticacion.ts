@@ -1,6 +1,7 @@
 import { createRemoteJWKSet } from "jose";
 import { authConfig } from "../config/env.ts";
 import { registradorDe } from "../config/logger.ts";
+import { describirError } from "../datos/describirError.ts";
 import { crearMiddlewareAutenticacion } from "../middlewares/autenticacion.ts";
 import { crearVerificadorJwt } from "./verificadorJwt.ts";
 
@@ -20,6 +21,29 @@ const obtenerClave = createRemoteJWKSet(new URL(configuracion.jwksUrl), {
   cooldownDuration: 30_000,
   cacheMaxAge: 10 * 60_000,
 });
+
+/**
+ * Baja las claves del proveedor ANTES de que la instancia diga que esta lista, y no recien con el primer pedido
+ * autenticado. En el cluster de PM2 cada instancia nueva (al arrancar o al recargar) empezaba con la memoria vacia
+ * y su primer pedido esperaba la descarga: con el proveedor lento o saturado ese pedido recibia un 503 (se vio en
+ * el reload con trafico). Se reintenta unas veces (con la CPU saturada durante un reload el proveedor a veces tarda
+ * o responde mal una vez suelta). Es de mejor esfuerzo: si no se pueden bajar, la instancia arranca igual y las baja
+ * en el primer pedido, como antes.
+ */
+export async function precargarClaves(intentos = 3): Promise<void> {
+  const registrador = registradorDe("Autenticacion");
+  for (let intento = 1; intento <= intentos; intento += 1) {
+    try {
+      await obtenerClave.reload();
+      registrador.info("Claves del proveedor de identidad precargadas");
+      return;
+    } catch (error) {
+      const resto = intento < intentos ? `reintento ${intento + 1} de ${intentos}` : "se bajan con el primer pedido";
+      registrador.warn(`No se pudieron precargar las claves del proveedor (${resto}): ${describirError(error)}`);
+      if (intento < intentos) await new Promise((resolver) => setTimeout(resolver, 1_000));
+    }
+  }
+}
 
 export const autenticar = crearMiddlewareAutenticacion(
   crearVerificadorJwt({

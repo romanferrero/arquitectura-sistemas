@@ -26,7 +26,7 @@ usó ninguna skill.
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
 correr la colección de Postman, **Docker Compose**, **Jest** y pruebas de mutación hechas a mano.
 
-Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9 a 14 y
+Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9 a 15 y
 las revisiones). Esfuerzo alto en todo, salvo la sesión 8 (planificación de las Partes 5 a 8), que fue extra alto.
 
 ---
@@ -1109,3 +1109,55 @@ proveedor caído y sin claves en memoria. La consigna de la skill está en ingl�
 Newman con Auth0 real: 81 requests, **162 aserciones, 0 fallas**.
 
 **Pendiente:** el OK del estudiante para el merge de `develop` a `main` (cierre de la Parte 7) y el mensaje para el profesor.
+
+
+---
+
+## Sesión 15 — PM2 cluster, salud, cierre ordenado y monitor de reinicios · 2026-11-05
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el plan sugería Opus 5.5 para esta sesión; el estudiante respondió "dale" sin pedir otro modelo y se siguió con el mismo).
+- **Modo:** implementación, en `feature/sesion-15-pm2`. El estudiante avisó dos veces que se le trabó la computadora; se retomó verificando el estado (todo estaba en commits) y asegurando lo que faltaba.
+- **Antes de empezar:** el estudiante dio el OK ("sigamos") y se hizo el merge de `develop` a `main` (Parte 7, `--no-ff`, sin tags, push). Decidió además mandarle al profesor **un solo mensaje para las Partes 7 y 8**, al cerrar la 8.
+- **Herramientas:** edición de archivos, Docker Compose (16 instancias reales), `pm2 ls`/`jlist` dentro del contenedor, `kill -9`, `pm2 reload` con tráfico en paralelo con **tokens reales de Auth0**, Newman y
+  `npm audit`. Sin skills ni subagentes (las revisiones del cierre de la Parte 8 van en la sesión 16).
+
+**Qué se hizo**
+- **PM2:** [`ecosystem.config.cjs`](ecosystem.config.cjs) con la API en cluster (`instances: "max"`, `autorestart`, `max_memory_restart: 300M`, `wait_ready`), y el worker, los dos suscriptores y el monitor en una instancia cada uno. En Docker cada contenedor corre `pm2-runtime --only <proceso>`.
+- **`GET /salud`:** comprueba MySQL, MongoDB y Redis en paralelo con tope de 2 s; 200 o 503, sin detalle de errores en la respuesta (es pública). Header **`X-Instancia`** en todas las respuestas.
+- **Servidor:** `process.send("ready")`, migra solo si `MIGRAR_AL_ARRANCAR` no es `false`, cierre ordenado con un tope configurable (`SHUTDOWN_TIMEOUT_MS`) y ante `uncaughtException`/`unhandledRejection`, y `/salud` responde 503 mientras se apaga.
+- **Migraciones:** servicio `migraciones` de una sola ejecución; la API y el worker esperan a que termine bien.
+- **Monitor de reinicios:** [`monitorReinicios`](src/procesos/monitorReinicios.ts) + [`crearDetectorInestabilidad`](src/monitoreo/crearDetectorInestabilidad.ts) (ventana deslizante pura): log `[CRÍTICO]` si una instancia reinicia más de 5 veces en un minuto.
+- **Precarga de las claves de Auth0** antes de decir `ready` (con 3 reintentos).
+- `npm audit fix`: se actualizaron zod, body-parser y qs (vulnerabilidades altas y moderadas). Queda `uuid` vía sequelize (moderada, sin arreglo sin bajar de versión).
+- README (sección nueva), `CLAUDE.md`, `.env.example`.
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| El endpoint se queda en **`/salud`** (la letra dice `/health`) y ahora comprueba las tres bases | Claude, según la tabla de nombres del plan | Es el nombre ya usado en todo el proyecto; la tabla de nombres lo relaciona |
+| El worker y los suscriptores corren **una** instancia | Claude, según el plan | Con Pub/Sub cada copia de un suscriptor recibiría todos los eventos y el trabajo se duplicaría |
+| `max_restarts: 20` y no 5 | Claude | Con 5, PM2 detendría el ciclo de caídas antes de que el monitor viera más de 5 en un minuto |
+| El monitor lee el **contador de reinicios** de PM2 (sondeo cada 5 s) en vez de escuchar eventos del bus | Claude | El contador cubre todos los motivos de reinicio y no depende de no perder un evento |
+| El detalle de un fallo del health check va al log y no a la respuesta | Claude | El endpoint es público: el mensaje mostraría hosts y puertos internos |
+| El timeout de cierre de la API (10 s) es menor que el `kill_timeout` de PM2 (12 s) | Claude | Para que el cierre ordenado alcance a terminar antes del SIGKILL |
+| Precargar las claves de Auth0 al arrancar, de mejor esfuerzo | Claude | Se vio en el reload con tráfico que el primer pedido autenticado de una instancia nueva recibía 503 si Auth0 tardaba |
+| Un `reload` con 16 instancias **no** se declara de cero fallos | Claude | Se midió y no lo es en esta máquina; se documenta con los números |
+| `PM2_INSTANCES` por defecto `max` en el compose | Claude, según la letra | Es lo que pide la letra; la variable permite bajarlo |
+
+**Verificación**
+- `npm run check`, `npm run build` y `npm test`: 41 suites, **520 tests** en verde (21 nuevos: health check y detector de reinicios).
+- **Cluster real en Docker (16 instancias):** `pm2 ls` con las 16 `online` y el monitor; 400 pedidos a `/salud` repartidos entre 23 y 26 por instancia (header `X-Instancia`, también en un 401). Cada instancia usa entre 70 y 160 MB (unos 2 GB en total, VM de Docker de 3,7 GB). Arrancan de a una: unos 2 minutos para las 16.
+- **`kill -9` de la instancia 0 siete veces seguidas:** PM2 la levantó cada vez (2 a 9 s) y el monitor dejó `[CRÍTICO] … se reinició 7 veces en 60 s (el límite es 5)`.
+- **`pm2 reload api` con 4 clientes autenticados en paralelo:** con **4 instancias**, 467 respuestas 200, **0 conexiones cortadas** y 3 respuestas 503 (Auth0 devolvió algo que no es JSON cuando varias instancias bajaban las claves a la vez). Con **16 instancias** (tres corridas, 2,5 a 3,5 min cada una) hubo entre 0,5 % y 1 % de pedidos fallidos (503 y conexiones cortadas), con la CPU saturada, chequeos de salud que vencían y fallos de red hacia Auth0 y MySQL.
+- **Cierre ordenado:** `docker compose stop worker-reportes` con un reporte en curso → el reporte terminó (`completado`) y el worker salió con código 0; `docker compose stop api` (16 instancias) → 5 s y salida 0.
+- **Newman con Auth0 real y 16 instancias:** dos corridas limpias (80 requests, 161 aserciones, 0 fallas). Una corrida anterior tuvo 3 aserciones fallidas, todas del mismo request de precio por un 502 de CoinGecko (el tercero).
+
+**Hallazgos**
+- **El reload no es "cero fallos" con 16 instancias en esta máquina:** el cuello es la CPU y las conexiones salientes (Auth0, MySQL), no PM2. Con 4 instancias el mecanismo anda limpio. Queda documentado en el README, con la mejora posible (compartir las claves por Redis o seguir usando las viejas si la descarga falla).
+- **Las instancias arrancan de a una** con `wait_ready` (unos 6 s cada una): el contenedor da `healthy` cuando responde la primera, no cuando están las 16.
+- Mi primer reload con tráfico mostró 503 por la descarga de las claves de Auth0 en instancias nuevas: de ahí la precarga.
+- Una vez el guion de prueba dio 503 de salud con MySQL/Mongo/Redis "no respondió en 2000 ms" bajo carga: es la CPU saturada, no un defecto.
+
+**Pendientes**
+- Sesión 16: pruebas de carga con k6 (una instancia contra el cluster), `RESPUESTAS-PARTE-8.md`, `/code-review` + `/security-review` de la Parte 8, merge a `main` y el **mensaje general al profesor** (Partes 7 y 8, como decidió el estudiante).
