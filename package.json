@@ -8,6 +8,7 @@
     "dev": "node --env-file=.env --watch src/servidor.ts",
     "build": "tsc",
     "start": "node --env-file=.env dist/servidor.js",
+    "cluster": "pm2-runtime ecosystem.config.cjs --only api,monitor-reinicios",
     "check": "tsc --noEmit -p tsconfig.check.json",
     "migrar": "node --env-file=.env src/datos/migrarCli.ts subir",
     "migrar:deshacer": "node --env-file=.env src/datos/migrarCli.ts bajar",
