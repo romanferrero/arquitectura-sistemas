@@ -1246,4 +1246,4 @@ Newman con Auth0 real: 81 requests, **162 aserciones, 0 fallas**.
 
 **Verificación tras los arreglos:** `check` y **521 tests** en verde (1 nuevo); imagen reconstruida con `docker compose up -d --build --wait`: 16 instancias y el monitor `online`, los siete servicios sanos; corrida liviana de k6 con el script modificado (8.688 pedidos, 0 fallas); Newman con Auth0 real, **dos corridas seguidas: 80 requests, 161 aserciones, 0 fallas**.
 
-**Pendiente:** el OK del estudiante para el merge de `develop` a `main` (cierre de la Parte 8); las capturas de `pm2 monit` (las saca el estudiante); y el **mensaje general al profesor** (Partes 7 y 8).
+**Cierre:** con el OK del estudiante, `develop` se mergeó a `main` (Parte 8, `--no-ff`, sin tags, push). **Pendiente:** las capturas de `pm2 monit` (las saca el estudiante) y el **mensaje general al profesor** (Partes 7 y 8).
