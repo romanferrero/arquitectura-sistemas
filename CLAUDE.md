@@ -43,6 +43,7 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
 | `npm run suscriptor:proyecciones` / `suscriptor:notificaciones` | Los dos suscriptores del canal de eventos (Pub/Sub); en Docker son los servicios `suscriptor-proyecciones` y `suscriptor-notificaciones` |
 | `npm run migrar` / `migrar:deshacer` / `migrar:estado` | Migraciones de MySQL |
 | `npm run db:verificar` | Comprueba que la app llegue a las tres bases |
+| `ETIQUETA=<nombre> docker compose run --rm --no-deps k6` | Prueba de carga (k6, 100 usuarios, perfil `carga`): `carga/prueba-carga.js`, resumen en `carga/resultados/`. Pasarle siempre la misma `PM2_INSTANCES` o `--no-deps`, y esperar a que estén todas las instancias `online` |
 
 ## Convenciones
 
@@ -96,4 +97,5 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
   (`MIGRAR_AL_ARRANCAR=false` en la API). `GET /salud` comprueba MySQL, MongoDB y Redis (200/503, sin detalle de errores: es público); todas las respuestas llevan `X-Instancia`.
   `instancia()`, `migrarAlArrancar()` y `cierreTimeoutMs()` están en `env.ts` (único lector de `process.env`). El monitor de reinicios usa el contador de PM2
   (`max_restarts` en 20 a propósito: con 5 PM2 pararía el ciclo antes de que el monitor lo viera).
+- Carga (Parte 8): en esta máquina (VM de Docker de 3,7 GB) **16 instancias bajo carga no entran**: el kernel llegó a matar a MySQL (OOM) y el rendimiento bajó de ~4.000 a 374 req/s; con 4 instancias anda bien. `PM2_MAX_MEMORY` es 512M (con 300M PM2 reiniciaba una instancia sana que atendía todo el tráfico). Un `mysqld` huérfano tras un OOM se cierra con `SIGTERM` dentro de la VM (`docker run --privileged --pid=host`), sin borrar el volumen. Antes de medir, detener otros proyectos de Docker. Los números están en `RESPUESTAS-PARTE-8.md`.
 - Tests en `pruebas/`, importando `describe`/`test`/`expect` desde `@jest/globals`.

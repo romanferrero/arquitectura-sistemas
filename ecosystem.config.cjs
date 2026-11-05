@@ -18,7 +18,7 @@
  *
  * Variables que lee (todas opcionales):
  *   PM2_INSTANCES       cuantas instancias de la API: un numero o "max" (por defecto "max")
- *   PM2_MAX_MEMORY      limite de memoria por instancia antes de reiniciarla (por defecto 300M)
+ *   PM2_MAX_MEMORY      limite de memoria por instancia antes de reiniciarla (por defecto 512M)
  *   SHUTDOWN_TIMEOUT_MS cuanto espera la API a los pedidos en curso al apagarse (por defecto 10000)
  */
 
@@ -42,7 +42,7 @@ const comun = {
   // umbral del monitor (5 por minuto) A PROPOSITO: con un limite de 5, PM2 pararia el crash loop antes de que el
   // monitor llegara a verlo y avisar.
   max_restarts: 20,
-  max_memory_restart: process.env.PM2_MAX_MEMORY ?? "300M", // tope contra fugas de memoria
+  max_memory_restart: process.env.PM2_MAX_MEMORY ?? "512M", // tope contra fugas (una instancia con todo el trafico se estabiliza en ~330 MB)
   // Carga el .env si existe (en local); en Docker no hay .env y las variables ya vienen del entorno.
   node_args: "--env-file-if-exists=.env",
   merge_logs: true,
