@@ -54,10 +54,13 @@ export function crearProyecciones(dependencias: {
 
   return {
     async proyectar(evento: EventoActivo): Promise<void> {
-      // La cache: sus metodos no rechazan (ya tratan a Redis como mejor esfuerzo).
-      await cache.invalidar(evento.activoId);
-      await cache.invalidarLista();
-      if (evento.tipo === "ACTIVO_ELIMINADO") await cache.quitarDelRanking(evento.activoId);
+      // La cache. Sus metodos no deberian rechazar (tratan a Redis como mejor esfuerzo), pero si uno lo hiciera
+      // no puede llevarse puestos el contador y la auditoria: cada operacion va en su propio paso.
+      await paso(`No se pudo invalidar la caché del activo ${evento.activoId}`, () => cache.invalidar(evento.activoId));
+      await paso("No se pudo invalidar la lista de la caché", () => cache.invalidarLista());
+      if (evento.tipo === "ACTIVO_ELIMINADO") {
+        await paso(`No se pudo sacar ${evento.activoId} del ranking`, () => cache.quitarDelRanking(evento.activoId));
+      }
 
       await paso(`No se pudo contar el evento ${evento.idEvento}`, async () => {
         await redis.hIncrBy(CLAVE_EVENTOS_ACTIVOS, evento.tipo, 1);

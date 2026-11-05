@@ -194,6 +194,34 @@ describe("proyecciones · cuando algo falla", () => {
     expect(lineas.some((linea) => linea.includes("Cache:"))).toBe(true);
   });
 
+  test("si un paso de la caché RECHAZA, igual se cuenta el evento y se audita (los pasos son independientes)", async () => {
+    const falso = crearRedisFalso();
+    const registro = crearRegistroEnMemoria();
+    const auditados: string[] = [];
+    const proyecciones = crearProyecciones({
+      cache: {
+        invalidar: async () => {
+          throw new Error("la caché explotó");
+        },
+        invalidarLista: async () => {
+          throw new Error("la lista explotó");
+        },
+        quitarDelRanking: async () => {
+          throw new Error("el ranking explotó");
+        },
+      },
+      redis: falso.redis,
+      auditoria: { registrarEvento: async (nuevo) => (auditados.push(nuevo.idEvento), "registrado" as const) },
+      registrador: registro.registradorDe("Proyecciones"),
+    });
+
+    await expect(proyecciones.proyectar(eventoEliminado)).resolves.toBeUndefined();
+
+    expect(falso.hashes.get(CLAVE_EVENTOS_ACTIVOS)).toEqual({ ACTIVO_ELIMINADO: "1" });
+    expect(auditados).toEqual([eventoEliminado.idEvento]);
+    expect(registro.lineas.filter((linea) => linea.includes("[ERROR]"))).toHaveLength(3);
+  });
+
   test("al terminar deja constancia de qué evento procesó", async () => {
     const { proyecciones, lineas } = armar();
 
