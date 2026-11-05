@@ -7,7 +7,7 @@ El plan vigente (Partes 5 a 8) está en [PLAN.md](PLAN.md); el de las Partes 3 y
 
 ## Resumen: skills y herramientas usadas
 
-Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron siete veces,
+Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron nueve veces,
 siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUDE.md`).
 
 | Skill | Cuándo | Para qué | Resultado |
@@ -19,14 +19,16 @@ siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUD
 | `/code-review` (nivel *high*) | Cierre de la Parte 6 | Ídem, sobre las sesiones 11 y 12 (autenticación, roles y modo pánico) | 10 hallazgos: 6 corregidos y 4 documentados |
 | `/security-review` | Cierre de la Parte 6 | Buscar vulnerabilidades en la autenticación y la autorización | Sin vulnerabilidades de alta confianza |
 | `/code-review` (nivel *high*) | Cierre de la Parte 7 | Ídem, sobre las sesiones 13 y 14 (CQRS, eventos y suscriptores) | 10 hallazgos: 5 corregidos y 5 documentados |
+| `/code-review` (nivel *high*) | Cierre de la Parte 8 | Ídem, sobre las sesiones 15 y 16 (PM2, salud, cierre ordenado, monitor y prueba de carga) | 10 hallazgos: 5 corregidos y 5 documentados |
+| `/security-review` | Cierre de la Parte 8 | Buscar vulnerabilidades en los cambios de PM2, el health check público y la prueba de carga | Sin vulnerabilidades de alta confianza |
 
-Las siete corren en un subproceso aparte (no comparten el contexto de la sesión). En el resto de las sesiones no se
+Las ocho primeras corren en un subproceso aparte (no comparten el contexto de la sesión). En la `/security-review` de la Parte 8 la skill pedía lanzar subtareas y Claude hizo el análisis directamente en la sesión, leyendo el código de los archivos con superficie de ataque (sin subagentes). En el resto de las sesiones no se
 usó ninguna skill.
 
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
 correr la colección de Postman, **Docker Compose**, **Jest** y pruebas de mutación hechas a mano.
 
-Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9 a 15 y
+Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9 a 16 y
 las revisiones). Esfuerzo alto en todo, salvo la sesión 8 (planificación de las Partes 5 a 8), que fue extra alto.
 
 ---
@@ -1216,3 +1218,32 @@ Newman con Auth0 real: 81 requests, **162 aserciones, 0 fallas**.
 - `/code-review` (nivel *high*) y `/security-review` de la Parte 8 (sesiones 15 y 16), con sus arreglos.
 - Las capturas de `pm2 monit` (las saca el estudiante).
 - El OK del estudiante para el merge de `develop` a `main` (cierre de la Parte 8) y el **mensaje general al profesor** (Partes 7 y 8).
+
+---
+
+## Revisión de la Parte 8 · 2026-11-05
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
+- **Skills:** `/code-review` (nivel *high*, sobre `develop` contra `main`, o sea las sesiones 15 y 16) y `/security-review`. Ambas anotadas en la tabla del principio.
+- **Rama:** `fix/revision-parte-8`, mergeada a `develop` con `--no-ff`.
+
+**`/code-review`: 10 hallazgos. Cada uno se verificó leyendo el código antes de decidir.**
+
+| # | Hallazgo | Decisión |
+|---|---|---|
+| 1 | `ecosystem.config.cjs` lee `PM2_INSTANCES`, `PM2_MAX_MEMORY` y `SHUTDOWN_TIMEOUT_MS` de `process.env`, pero el CLI de PM2 no carga el `.env`: con `npm run cluster` se ignoraban y el `kill_timeout` quedaba distinto del tiempo de cierre de la API; además no se validaba el valor | **Corregido:** el archivo carga el `.env` (sin pisar el entorno) y valida `SHUTDOWN_TIMEOUT_MS` con las mismas reglas que `env.ts`; verificado con un `.env` temporal |
+| 2 | El `setup()` de k6 borraba todo activo cuyo símbolo empezara con `LD` o `K` (KSM, KAVA, LDO son reales) | **Corregido:** prefijo `ZZ` **y** nombre propio de la prueba; verificado: los dos activos que había (ETH y ADA) no se tocaron |
+| 3 | `/salud` es público y consulta las tres bases en cada pedido, sin caché | **Documentado** (README y mejoras): con las sondas de Docker no pesa; mejora posible, guardar 1 o 2 s el resultado |
+| 4 | El monitor lanza una lectura a PM2 cada 5 s sin esperar a la anterior ni tiempo máximo: si PM2 no contesta, se apilan | **Corregido:** una sola lectura pendiente a la vez y tope de 4 s. Efecto observado: avisa «PM2 no respondió» mientras arrancan las 16 instancias (4 avisos) y después ninguno |
+| 5 | El detector no rehabilita el aviso cuando un proceso se recupera: un segundo episodio dentro de la ventana se perdía | **Corregido** con un test nuevo (521 tests); mutación manual: sin el arreglo el test falla |
+| 6 | Los handlers de `uncaughtException`/`unhandledRejection` se registran después de `listen`, cierran la instancia y salen con código 1 | **Descartado:** es el diseño de la sesión 15 (cerrar ordenado y que PM2 reinicie limpio); un error durante el arranque ya termina el proceso con código 1 por otro camino |
+| 7 | `env: { NODE_ENV: "production" }` pisa el `NODE_ENV` del `.env` bajo PM2 | **Documentado** con un comentario: es a propósito, solo cambia el formato del log (JSON) |
+| 8 | k6 con la imagen `latest` y resultados en un directorio montado (en Linux el usuario del contenedor puede no poder escribir) | **Corregido** la versión (`grafana/k6:2.3.0`); el permiso en Linux queda en un comentario del compose |
+| 9 | `precargarClaves` puede bloquear el arranque hasta ~11 s por instancia con el proveedor caído | **Documentado** (README): es de mejor esfuerzo por diseño |
+| 10 | `stop_grace_period: 25s` fijo aunque `SHUTDOWN_TIMEOUT_MS` admita hasta 60 s | **Documentado** en el compose, en `.env.example` y en el README |
+
+**`/security-review`:** sin vulnerabilidades de alta confianza. Se examinó lo nuevo con superficie de ataque: `/salud` público (no devuelve el detalle de los errores, solo `ok`/`error` y tiempos, el número de instancia y el `pid`), `X-Instancia`, la precarga de claves (no cambia la verificación del token), el Dockerfile (corre como `node`, el `.env` queda fuera de la imagen por `.dockerignore`), el servicio `k6` y las credenciales de la prueba de carga (solo por variables de entorno, el `.env` está ignorado por git).
+
+**Verificación tras los arreglos:** `check` y **521 tests** en verde (1 nuevo); imagen reconstruida con `docker compose up -d --build --wait`: 16 instancias y el monitor `online`, los siete servicios sanos; corrida liviana de k6 con el script modificado (8.688 pedidos, 0 fallas); Newman con Auth0 real, **dos corridas seguidas: 80 requests, 161 aserciones, 0 fallas**.
+
+**Pendiente:** el OK del estudiante para el merge de `develop` a `main` (cierre de la Parte 8); las capturas de `pm2 monit` (las saca el estudiante); y el **mensaje general al profesor** (Partes 7 y 8).

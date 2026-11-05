@@ -53,6 +53,8 @@ services:
       retries: 5
       start_period: 60s
     # `docker compose stop` manda SIGTERM a pm2-runtime, que detiene cada instancia con SIGINT: terminan los pedidos en curso.
+    # Tiene que ser MAYOR que SHUTDOWN_TIMEOUT_MS + 2 s (el kill_timeout de PM2): con el valor por defecto (10 s) alcanza; si se
+    # sube SHUTDOWN_TIMEOUT_MS hay que subir esto tambien, o Docker manda SIGKILL antes de que termine el cierre ordenado.
     stop_grace_period: 25s
     restart: unless-stopped
 
@@ -128,7 +130,10 @@ services:
   # o las variables CARGA_* del .env (ver .env.example), con las que pide el token al proveedor de identidad.
   # El resumen de cada corrida queda en carga/resultados/<ETIQUETA>.json.
   k6:
-    image: grafana/k6:latest
+    # Version fija: un k6 nuevo puede cambiar las opciones o el formato del resumen y romper la medicion documentada.
+    # El resumen se escribe en ./carga/resultados: en Linux el usuario del contenedor (12345) necesita poder escribir ahi
+    # (chmod a+w carga/resultados); en Docker Desktop no hace falta.
+    image: grafana/k6:2.3.0
     profiles: ["carga"]
     environment:
       URL_BASE: http://api:${PORT:-3000}

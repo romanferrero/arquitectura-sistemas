@@ -26,7 +26,8 @@ export type AlertaInestabilidad = {
  *
  * Es una FABRICA con el reloj por parametro para probarla sin esperar.
  *
- * Para no inundar el log, un proceso que sigue inestable se vuelve a avisar recien despues de una ventana entera.
+ * Para no inundar el log, un proceso que sigue inestable se vuelve a avisar recien despues de una ventana entera;
+ * pero si se recupera (vuelve a tener `maximo` reinicios o menos en la ventana), el siguiente episodio se avisa enseguida.
  */
 export function crearDetectorInestabilidad(opciones: { maximo: number; ventanaMs: number }) {
   const { maximo, ventanaMs } = opciones;
@@ -56,7 +57,11 @@ export function crearDetectorInestabilidad(opciones: { maximo: number; ventanaMs
         }
         reinicios.set(clave, instantes);
 
-        if (instantes.length <= maximo) continue;
+        if (instantes.length <= maximo) {
+          // Se recupero: si vuelve a inestabilizarse, se avisa de nuevo sin esperar a que pase la ventana del aviso anterior.
+          ultimoAviso.delete(clave);
+          continue;
+        }
         const avisadoEn = ultimoAviso.get(clave);
         if (avisadoEn !== undefined && ahoraMs - avisadoEn < ventanaMs) continue;
         ultimoAviso.set(clave, ahoraMs);

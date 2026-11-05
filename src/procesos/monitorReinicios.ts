@@ -3,6 +3,7 @@ import { logger, registradorDe } from "../config/logger.ts";
 import { describirError } from "../datos/describirError.ts";
 import { crearDetectorInestabilidad } from "../monitoreo/crearDetectorInestabilidad.ts";
 import type { LecturaProceso } from "../monitoreo/crearDetectorInestabilidad.ts";
+import { conTiempoMaximo } from "../utilidades/conTiempoMaximo.ts";
 
 /**
  * MONITOR DE REINICIOS: un proceso aparte, que PM2 corre junto a la API, que le pregunta a PM2 cada pocos segundos
@@ -19,6 +20,8 @@ const registrador = registradorDe("MonitorReinicios");
 const MAXIMO_REINICIOS = 5;
 const VENTANA_MS = 60_000;
 const CADA_MS = 5_000;
+/** Cuanto se le espera a PM2 por una lectura: bajo CPU saturada o durante un reload puede tardar o no contestar. */
+const LECTURA_TIEMPO_MAXIMO_MS = 4_000;
 const NOMBRE_PROPIO = "monitor-reinicios";
 
 const detector = crearDetectorInestabilidad({ maximo: MAXIMO_REINICIOS, ventanaMs: VENTANA_MS });
@@ -41,9 +44,22 @@ function leerProcesos(): Promise<LecturaProceso[]> {
   });
 }
 
+/**
+ * Una sola lectura a PM2 a la vez: si la anterior sigue pendiente (PM2 lento o colgado) se espera a esa misma en vez de
+ * pedir otra cada 5 s, asi los pedidos no se apilan.
+ */
+let lecturaPendiente: Promise<LecturaProceso[]> | undefined;
+function leerUnaVez(): Promise<LecturaProceso[]> {
+  lecturaPendiente ??= leerProcesos().finally(() => {
+    lecturaPendiente = undefined;
+  });
+  return lecturaPendiente;
+}
+
 async function vigilar(): Promise<void> {
   try {
-    for (const alerta of detector.observar(await leerProcesos(), Date.now())) {
+    const procesos = await conTiempoMaximo(leerUnaVez, LECTURA_TIEMPO_MAXIMO_MS, `PM2 no respondió en ${LECTURA_TIEMPO_MAXIMO_MS} ms`);
+    for (const alerta of detector.observar(procesos, Date.now())) {
       registrador.error(
         `[CRÍTICO] Posible inestabilidad en el despliegue: ${alerta.nombre} (instancia ${alerta.id}) se reinició ` +
           `${alerta.reiniciosEnVentana} veces en ${alerta.ventanaMs / 1000} s (el límite es ${MAXIMO_REINICIOS})`,

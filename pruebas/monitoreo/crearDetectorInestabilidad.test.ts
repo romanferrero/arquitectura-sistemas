@@ -77,6 +77,19 @@ describe("crearDetectorInestabilidad", () => {
     expect(detector.observar([api(0, 13)], 5_000 + MINUTO)).toHaveLength(1); // pasó una ventana y sigue con otros 6 reinicios
   });
 
+  test("si se recupera y vuelve a inestabilizarse antes de que pase una ventana desde el último aviso, avisa de nuevo", () => {
+    const detector = armar();
+    detector.observar([api(0, 0)], 0);
+    detector.observar([api(0, 3)], 1_000);
+    expect(detector.observar([api(0, 6)], 30_000)).toHaveLength(1); // 6 en el último minuto: aviso
+    // A los 61 s vencieron los 3 primeros: quedan 3 (se recuperó) y no hay aviso.
+    expect(detector.observar([api(0, 6)], 61_000)).toHaveLength(0);
+    // Otro episodio a los 70 s, a solo 40 s del aviso anterior: 3 + 4 = 7 en la ventana. Tiene que avisar.
+    const alertas = detector.observar([api(0, 10)], 70_000);
+    expect(alertas).toHaveLength(1);
+    expect(alertas[0]?.reiniciosEnVentana).toBe(7);
+  });
+
   test("si no hay reinicios nuevos no alerta nunca, por alto que sea el contador acumulado", () => {
     const detector = armar();
     detector.observar([api(0, 100)], 0);
