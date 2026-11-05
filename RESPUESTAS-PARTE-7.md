@@ -107,7 +107,7 @@ está caído al publicar. Se dejó Pub/Sub porque es lo que pide la letra y porq
 ## 6. ¿Qué dificultades encontraste y cómo las resolviste?
 
 1. **Los tests de la suite entera se quedaban sin memoria** (`Jest worker ran out of memory`) con un proceso por núcleo (16) y Docker corriendo
-   en una máquina de 8 GB; pasaban de a uno. → Se limitó `maxWorkers` a 4 en `jest.config.js`: la suite corre en unos 3 segundos.
+   en una máquina de 8 GB; pasaban de a uno. → Se limitó `maxWorkers` en `jest.config.js` (con 4 todavía falló una vez; con 2 pasó 4 corridas seguidas): la suite corre en unos 5 segundos.
 2. **Una mutación sobrevivió:** quitar la comprobación de `ACTIVO_ELIMINADO` en las notificaciones no rompía nada, porque la baja ya queda
    cubierta por la ausencia de `despues`. Pero el contrato permite un `ACTIVO_ELIMINADO` con `despues`. → Se agregó ese caso al test.
 3. **Con la auditoría asíncrona, tres requests de Postman dependían de que fuera inmediata** (leer justo después de escribir). Pasaron, pero
