@@ -2,7 +2,7 @@ import { describe, expect, test } from "@jest/globals";
 import { ErrorApi } from "../../src/errores/ErrorApi.ts";
 import type { Activo } from "../../src/modelos/activo.ts";
 import { CLAVE_RANKING } from "../../src/servicios/crearCacheActivos.ts";
-import { CLAVE_REPORTES_EXITOSOS, crearServicioEstadisticas } from "../../src/servicios/crearServicioEstadisticas.ts";
+import { CLAVE_EVENTOS_ACTIVOS, CLAVE_REPORTES_EXITOSOS, crearServicioEstadisticas } from "../../src/servicios/crearServicioEstadisticas.ts";
 import { crearRegistroEnMemoria } from "../ayudas/registro.ts";
 import { crearRedisFalso } from "../ayudas/redisFalso.ts";
 
@@ -22,7 +22,20 @@ describe("crearServicioEstadisticas", () => {
   test("sin datos todo está en cero y el ranking vacío", async () => {
     const { servicio } = armar();
 
-    expect(await servicio.obtener()).toEqual({ reportesExitosos: 0, masConsultados: [] });
+    expect(await servicio.obtener()).toEqual({
+      reportesExitosos: 0,
+      eventosActivos: { ACTIVO_CREADO: 0, ACTIVO_ACTUALIZADO: 0, ACTIVO_ELIMINADO: 0 },
+      masConsultados: [],
+    });
+  });
+
+  test("los eventos de activos procesados se cuentan por tipo (HINCRBY) y los que faltan valen 0", async () => {
+    const { servicio, redis } = armar();
+    await redis.hIncrBy(CLAVE_EVENTOS_ACTIVOS, "ACTIVO_CREADO", 1);
+    await redis.hIncrBy(CLAVE_EVENTOS_ACTIVOS, "ACTIVO_CREADO", 1);
+    await redis.hIncrBy(CLAVE_EVENTOS_ACTIVOS, "ACTIVO_ELIMINADO", 1);
+
+    expect((await servicio.obtener()).eventosActivos).toEqual({ ACTIVO_CREADO: 2, ACTIVO_ACTUALIZADO: 0, ACTIVO_ELIMINADO: 1 });
   });
 
   test("el contador de reportes lo lleva INCR: cada incremento se refleja", async () => {

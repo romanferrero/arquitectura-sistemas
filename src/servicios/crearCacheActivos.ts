@@ -5,6 +5,8 @@ import type { Registrador } from "../pipeline/pipeline.ts";
 
 export const PREFIJO_ACTIVO = "activo:";
 export const CLAVE_RANKING = "activos:mas-consultados";
+/** La lista completa del portafolio, que es lo que sirve `GET /api/activos` sin ir a MySQL. */
+export const CLAVE_LISTA = "activos:todos";
 
 /**
  * Cache de activos en Redis (cache-aside): se guarda cada activo como un String JSON
@@ -72,6 +74,24 @@ export function crearCacheActivos(dependencias: {
     await intentar(`No se pudo guardar ${clave}`, () => redis.set(clave, JSON.stringify(activo), { EX: ttlSegundos }), undefined);
   }
 
+  /** La lista guardada, o undefined si no esta (o Redis no responde, o el dato no es una lista de activos). */
+  async function leerLista(): Promise<Activo[] | undefined> {
+    const texto = await intentar(`No se pudo leer ${CLAVE_LISTA}`, () => redis.get(CLAVE_LISTA), null);
+    if (texto === null) return undefined;
+
+    try {
+      const dato: unknown = JSON.parse(texto);
+      const esLista =
+        Array.isArray(dato) &&
+        dato.every((elemento) => typeof elemento === "object" && elemento !== null && typeof (elemento as { id?: unknown }).id === "string");
+      if (esLista) return dato as Activo[];
+    } catch {
+      // cae al aviso de abajo
+    }
+    registrador.error(`Dato inválido en la caché (${CLAVE_LISTA}): se lee de MySQL`);
+    return undefined;
+  }
+
   /** Suma una consulta al ranking de activos mas consultados (ZINCRBY, atomico). */
   async function contarConsulta(id: string): Promise<void> {
     await intentar("No se pudo actualizar el ranking", () => redis.zIncrBy(CLAVE_RANKING, 1, normalizar(id)), 0);
@@ -100,6 +120,24 @@ export function crearCacheActivos(dependencias: {
       await guardar(activo); // este si se espera: asi la lectura siguiente ya es un HIT
       void contarConsulta(id);
       return { activo, cache: "MISS" };
+    },
+
+    /**
+     * Lo mismo que `consultar`, pero para la LISTA completa del portafolio (`activos:todos`): primero Redis;
+     * si no esta, `cargar` la lee de MySQL y se guarda con TTL. Es lo que sirve `GET /api/activos`.
+     */
+    async consultarLista(cargar: () => Promise<Activo[]>): Promise<{ activos: Activo[]; cache: "HIT" | "MISS" }> {
+      const enCache = await leerLista();
+      if (enCache !== undefined) return { activos: enCache, cache: "HIT" };
+
+      const activos = await cargar();
+      await intentar(`No se pudo guardar ${CLAVE_LISTA}`, () => redis.set(CLAVE_LISTA, JSON.stringify(activos), { EX: ttlSegundos }), undefined);
+      return { activos, cache: "MISS" };
+    },
+
+    /** Saca la lista de la cache: cualquier alta, cambio o baja la deja desactualizada. */
+    async invalidarLista(): Promise<void> {
+      await intentar(`No se pudo invalidar ${CLAVE_LISTA}`, () => redis.del(CLAVE_LISTA), 0);
     },
 
     /** Saca el activo de la cache (despues de un PUT o un DELETE confirmado en MySQL). */

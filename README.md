@@ -1,7 +1,7 @@
 # API REST — Portafolio de Criptoactivos
 
 API REST para gestionar un portafolio de criptoactivos, con CRUD completo sobre
-persistencia en MySQL, caché y preferencias en Redis, reportes asíncronos con una cola (BullMQ), autenticación con JWT (Auth0) y control de acceso por roles, integración con APIs externas (cotizaciones y tipo de cambio)
+persistencia en MySQL, caché y preferencias en Redis, reportes asíncronos con una cola (BullMQ), autenticación con JWT (Auth0), control de acceso por roles y CQRS con eventos en Redis Pub/Sub, integración con APIs externas (cotizaciones y tipo de cambio)
 y procesamiento con el patrón **Pipes & Filters**: un pipeline de ingesta para los activos
 nuevos y otro de análisis de riesgo para lotes.
 
@@ -40,6 +40,8 @@ cp .env.example .env      # en Windows: copy .env.example .env
 | `npm run migrar:estado` | Lista las migraciones aplicadas y las pendientes |
 | `npm run idp:falso` | Proveedor de identidad falso para desarrollo y pruebas (imita a Auth0, sin cuenta) |
 | `npm run worker` | Levanta el worker de la cola de reportes (en otra terminal, además de `npm run dev`) |
+| `npm run suscriptor:proyecciones` | Levanta el suscriptor que deja la caché al día y registra la auditoría al recibir cada evento de activos |
+| `npm run suscriptor:notificaciones` | Levanta el suscriptor de las Whale Alert (avisa cuando una operación supera el límite del usuario) |
 | `npm run db:verificar` | Comprueba que MySQL, MongoDB y Redis respondan con la configuración del `.env` |
 
 Los comandos son, en realidad:
@@ -49,6 +51,8 @@ node --env-file=.env --watch src/servidor.ts    # dev
 tsc                                             # build
 node --env-file=.env dist/servidor.js           # start
 node --env-file=.env src/procesos/workerReportes.ts   # worker
+node --env-file=.env src/procesos/suscriptorProyecciones.ts      # suscriptor de proyecciones
+node --env-file=.env src/procesos/suscriptorNotificaciones.ts    # suscriptor de notificaciones
 node --experimental-vm-modules node_modules/jest/bin/jest.js   # test
 ```
 
@@ -113,8 +117,9 @@ Se usa `DECIMAL` y no `FLOAT` para no arrastrar errores de redondeo con dinero.
 
 ### Auditoría en MongoDB
 
-Cada vez que el servicio **crea, actualiza o elimina** un activo en MySQL, guarda un registro en
-la colección `auditoria_activos` de MongoDB. Los registros no tienen forma fija, y por eso viven
+Cada vez que se **crea, actualiza o elimina** un activo en MySQL hay un registro en la colección
+`auditoria_activos` de MongoDB. Lo escribe el **suscriptor de proyecciones** al recibir el evento que publicó
+el comando (ver *CQRS*): la API no escribe en MongoDB. Los registros no tienen forma fija, y por eso viven
 en MongoDB y no en una tabla:
 
 | Operación | `antes` | `despues` | Otros campos |
@@ -141,11 +146,12 @@ Va del evento más reciente al más viejo y sigue disponible aunque el activo ya
 justamente lo que queda). `GET /api/auditoria` lista el historial general; `?operacion=ELIMINAR`
 filtra y `?limite=` acota (de 1 a 200, 50 por defecto). Un id que nunca existió da 404.
 
-> **Si MongoDB falla, la operación no se pierde.** MySQL y MongoDB son dos escrituras
-> independientes y no hay una transacción que abarque las dos. Como MySQL ya confirmó lo que
-> importa, la auditoría es de **mejor esfuerzo**: si no se puede registrar (o MongoDB no responde
-> en 2 segundos), la API responde igual con éxito y deja el error en el log. El costo es que
-> puede haber operaciones sin registro. Las consultas del historial, en cambio, responden 503 si
+> **La auditoría es asíncrona y de mejor esfuerzo.** MySQL y MongoDB son dos escrituras independientes y no hay
+> una transacción que abarque las dos. MySQL confirma primero; el registro aparece un instante después, cuando el
+> suscriptor procesa el evento. Si MongoDB falla, el suscriptor deja el error en su log y sigue; si el suscriptor
+> está **detenido**, los eventos de ese lapso **no se auditan** (Pub/Sub no los guarda). Es el costo de desacoplar
+> la API de MongoDB: puede haber operaciones sin registro. Cada registro de un evento lleva su `idEvento` (índice
+> único), así que recibir el mismo evento dos veces no lo duplica. Las consultas del historial responden 503 si
 > MongoDB no está. La solución completa sería un *Transactional Outbox* (ver mejoras).
 
 ### Redis: caché, ranking y preferencias
@@ -161,8 +167,8 @@ diferencia importa para entender qué pasa cuando se cae:
 
 **Caché (cache-aside).** `GET /api/activos/:id` mira primero `activo:<id>`; si no está (`MISS`) lee
 de MySQL y lo guarda con el TTL de `CACHE_TTL_SEGUNDOS`; la próxima lectura sale de Redis
-(`HIT`). El header `X-Cache` lo informa. `PUT` y `DELETE` invalidan la clave después de que MySQL
-confirma. Solo la lectura pública por id usa la caché: actualizar, eliminar y calcular el
+(`HIT`). El header `X-Cache` lo informa. Cuando un `PUT` o un `DELETE` se confirma en MySQL, el **suscriptor de
+proyecciones** invalida la clave al recibir el evento (ver *CQRS*). Solo la lectura por id y la lista usan la caché: actualizar, eliminar y calcular el
 rendimiento leen siempre de MySQL, que es la fuente de verdad.
 
 ```bash
@@ -171,12 +177,11 @@ curl -i http://localhost:3000/api/activos/<id>      # X-Cache: HIT
 docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ttl activo:<id>'
 ```
 
-**Límite conocido.** Si Redis está caído cuando se hace un `PUT`, no se puede invalidar: al volver
-(con AOF sus datos persisten) la caché puede devolver el activo viejo **hasta que venza el TTL**.
-Se comprobó: con TTL de 60 s, un `GET` posterior devolvió `cantidad: 1` cuando MySQL ya tenía `3`, y
-se corrigió solo al vencer. También puede pasar, sin que Redis se caiga, si una lectura que ya leyó
-de MySQL guarda su resultado justo después de la invalidación. Por eso el TTL se mantiene corto; la
-Parte 7 (CQRS y Pub/Sub) revisa cómo sincronizar la caché.
+**Límite conocido.** Si el evento no llega al suscriptor de proyecciones (Redis caído cuando se publica, o el
+suscriptor detenido), la caché **no se invalida**: puede devolver el activo viejo **hasta que venza el TTL**.
+Se comprobó: con el suscriptor parado, un `POST` dejó la lista cacheada sin el activo nuevo (`X-Cache: HIT`) aunque
+MySQL ya lo tenía. También puede pasar, sin que nada se caiga, si una lectura que ya leyó de MySQL guarda su
+resultado justo después de la invalidación. Por eso el TTL se mantiene corto.
 
 **Ranking.** Cada consulta por id suma uno en `activos:mas-consultados` y borrar un activo lo saca.
 
@@ -195,7 +200,10 @@ demora las respuestas.
 | Clave | Tipo | Contenido |
 |---|---|---|
 | `activo:<id>` | String + TTL | El activo en JSON |
+| `activos:todos` | String + TTL | La lista completa del portafolio en JSON (la que sirve `GET /api/activos`) |
 | `activos:mas-consultados` | Sorted Set | Id del activo → cantidad de consultas |
+| `activos-actualizaciones` | Canal Pub/Sub (no es una clave) | Los eventos de activos creados, actualizados y eliminados |
+| `estadisticas:eventos-activos` | Hash (`HINCRBY`) | Cuántos eventos de cada tipo procesó el suscriptor de proyecciones |
 | `preferencias:<sub>` | Hash | `monedaVisualizacion`, `limiteAlertaUsd` de ese usuario |
 | `modo_panico` | String | `"true"` mientras el modo pánico está activo (ver *Roles y modo pánico*) |
 
@@ -217,7 +225,7 @@ docker compose up -d --build --wait          # incluye el servicio worker-report
 
 curl -i -X POST http://localhost:3000/api/activos/reporte        # 202 + Location + { idReporte, estado: "en_cola" }
 curl http://localhost:3000/api/reportes/<idReporte>              # en_cola -> procesando (progreso) -> completado
-curl http://localhost:3000/api/estadisticas                      # reportes exitosos y activos más consultados
+curl http://localhost:3000/api/estadisticas                      # reportes exitosos, eventos de activos por tipo y activos más consultados
 docker compose logs -f worker-reportes                           # los eventos completed / failed
 ```
 
@@ -273,12 +281,14 @@ docker compose up -d --build --wait     # la API, MySQL, MongoDB y Redis
 curl http://localhost:3000/salud
 ```
 
-`docker-compose.yml` levanta cinco servicios y espera a que estén sanos:
+`docker-compose.yml` levanta siete servicios y espera a que estén sanos:
 
 | Servicio | Imagen | Notas |
 |---|---|---|
 | `api` | La del [`Dockerfile`](Dockerfile) (Node 24, multi-stage, usuario sin privilegios) | Arranca recién cuando MySQL, MongoDB y Redis están `healthy`; aplica las migraciones al iniciar |
 | `worker-reportes` | La misma imagen que `api`, con otro comando | Proceso aparte que consume la cola de reportes. Espera a que la API esté sana (ella aplica las migraciones). Sin puertos |
+| `suscriptor-proyecciones` | La misma imagen que `api`, con otro comando | Suscriptor del canal `activos-actualizaciones`: deja la caché al día, cuenta el evento y registra la auditoría en MongoDB. Sin puertos; no necesita a la API ni a MySQL |
+| `suscriptor-notificaciones` | La misma imagen que `api`, con otro comando | Otro suscriptor del mismo canal: avisa de las Whale Alert (solo usa Redis). Sin puertos |
 | `mysql` | `mysql:8.4` | Datos en el volumen `mysql_data` |
 | `mongodb` | `mongo:8.0` | Datos en el volumen `mongodb_data` |
 | `redis` | `redis:7.4-alpine` | Con contraseña y AOF, datos en el volumen `redis_data`. La política `noeviction` hace que, con la memoria llena, rechace escrituras en vez de borrar claves en silencio (lo necesitará la cola de la Parte 5) |
@@ -286,13 +296,14 @@ curl http://localhost:3000/salud
 Los cuatro puertos se publican solo en `127.0.0.1`. La API recibe el mismo `.env` que usás en
 local, pero el compose **pisa** las variables que cambian dentro de la red de Docker: allí las
 bases no están en `localhost` sino bajo el nombre de su servicio (`MYSQL_HOST=mysql`,
-`MONGO_HOST=mongodb`, `REDIS_HOST=redis`; el bloque lo comparten la API y el worker) y se llega por el puerto interno (`3306`, `27017`, `6379`), no por el que se
+`MONGO_HOST=mongodb`, `REDIS_HOST=redis`; el bloque lo comparten la API, el worker y los suscriptores) y se llega por el puerto interno (`3306`, `27017`, `6379`), no por el que se
 publica al host.
 
 | Comando | Qué hace |
 |---|---|
 | `docker compose logs -f api` | Sigue los logs de la API |
 | `docker compose logs -f worker-reportes` | Sigue los logs del worker (eventos `completed` y `failed`) |
+| `docker compose logs -f suscriptor-proyecciones suscriptor-notificaciones` | Sigue a los dos suscriptores (eventos procesados y Whale Alert) |
 | `docker compose up -d --wait mysql mongodb redis` | Solo las bases (y la API con `npm run dev`) |
 | `docker compose down` | Baja todo y **conserva** los datos |
 | `docker compose down -v` | Baja todo y **borra** los datos (incluida la caché): el próximo arranque parte de cero |
@@ -393,6 +404,124 @@ Ver el final de [AUTH0.md](AUTH0.md).
 
 ---
 
+## CQRS: comandos, consultas y eventos
+
+**CQRS** (*Command Query Responsibility Segregation*) separa lo que **modifica** datos (comandos) de lo que solo los **consulta** (consultas), cada
+lado con su propio servicio y su propio modelo de datos:
+
+```
+                 ┌── COMANDOS (crear, actualizar, eliminar) ──► MySQL ──► PUBLISH activos-actualizaciones
+ Controlador ────┤        escritura: la fuente de verdad                    │  (el evento: "pasó esto")
+                 │                                                          ├──► suscriptor de PROYECCIONES: invalida la caché, cuenta y audita (MongoDB)
+                 │                                                          └──► suscriptor de NOTIFICACIONES: avisa de las Whale Alert
+                 └── CONSULTAS (listar, ver, precio, historial) ──► Redis ──(si no está)──► MySQL
+                          lectura: el modelo de lectura, sin pasar por la base principal
+```
+
+| | Comandos | Consultas |
+|---|---|---|
+| Qué hacen | Validan, persisten en MySQL y **anuncian** lo ocurrido | Leen. **Nunca** modifican |
+| Dónde | [`servicios/comandos/`](src/servicios/comandos/crearComandosActivos.ts) | [`servicios/consultas/`](src/servicios/consultas/crearConsultasActivos.ts) |
+| Fuente de datos | MySQL (el modelo de escritura) | **Redis** (el modelo de lectura); MySQL solo si el dato no está |
+| Si Redis falla | La operación **se confirma igual** (el evento es de mejor esfuerzo) | Se lee de MySQL |
+
+**El modelo de lectura.** `GET /api/activos` y `GET /api/activos/:id` (y el activo que usa `/precio`) salen de Redis (`activos:todos` y
+`activo:<id>`). Si no están, se leen de MySQL y se guardan con TTL. El header `X-Cache` lo dice. El filtro `?simbolo=` se aplica sobre la lista
+ya cacheada. Cuando un comando se confirma, el **suscriptor de proyecciones** invalida la entrada y la lista (el comando no toca la caché); el TTL corrige solo lo que se escape.
+
+**El evento.** Después de que MySQL confirma, el comando publica un mensaje en el canal de Redis `activos-actualizaciones`
+([contrato](src/eventos/eventoActivo.ts), validado con Zod en los dos extremos):
+
+```json
+{ "version": 1, "idEvento": "8f509a2c-…", "tipo": "ACTIVO_ACTUALIZADO", "activoId": "…",
+  "antes": { "cantidad": 1, … }, "despues": { "cantidad": 2, … }, "camposModificados": ["cantidad"],
+  "metadatos": { "origen": "API", "usuario": "auth0|…" }, "ocurridoEn": "2026-11-04T12:00:00.000Z" }
+```
+
+`ACTIVO_CREADO` trae `despues`, `ACTIVO_ELIMINADO` trae `antes` y `ACTIVO_ACTUALIZADO` trae los dos más los campos que cambiaron. Se puede ver en vivo:
+
+```bash
+docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning subscribe activos-actualizaciones'
+```
+
+**Publicar es de mejor esfuerzo.** Si Redis no está en ese instante, el evento se pierde (queda en el log) y la operación responde bien igual:
+MySQL ya confirmó y no hay forma de deshacerlo. Además **Pub/Sub no guarda el mensaje**: el log dice cuántos suscriptores lo recibieron
+(`receptores: N`); con `0` el evento no le llegó a nadie ni se va a reenviar, y la API lo deja como **WARN**: nadie va a invalidar la caché ni auditar esa operación. La solución completa sería un *Transactional Outbox* (o *Redis Streams*).
+
+**Cuánto reduce la carga sobre MySQL.** Medido con `Com_select` (el contador de consultas `SELECT` que ve MySQL), con 100 lecturas seguidas de
+`GET /api/activos`:
+
+| | Consultas a MySQL |
+|---|---|
+| Con Redis como modelo de lectura | **0** |
+| Sin Redis (cada lectura va a MySQL) | **100** |
+
+La mayoría del tráfico de una API es de lectura: con este camino la base principal queda para lo que solo ella puede hacer (guardar y garantizar la
+integridad), y las lecturas escalan con Redis, que responde de memoria.
+
+### Los suscriptores (Pub/Sub)
+
+El comando **solo valida, persiste y publica**. Lo demás lo hacen dos **suscriptores**, procesos aparte (misma imagen, otro comando; en Docker son
+los servicios `suscriptor-proyecciones` y `suscriptor-notificaciones`). Cada uno recibe **todos** los eventos y hace lo suyo; no se conocen entre sí
+ni conocen a la API, y se pueden parar, reiniciar o escalar por separado.
+
+| Suscriptor | Qué hace con cada evento | Usa |
+|---|---|---|
+| **Proyecciones** ([`crearProyecciones`](src/eventos/crearProyecciones.ts)) | 1. Invalida `activo:<id>` y `activos:todos` (y saca del ranking al activo eliminado). 2. Suma uno a `estadisticas:eventos-activos` (`HINCRBY`). 3. Registra la auditoría en MongoDB, **idempotente por `idEvento`** | Redis y MongoDB |
+| **Notificaciones** ([`crearNotificaciones`](src/eventos/crearNotificaciones.ts)) | **Whale Alert**: si la posición queda por encima del `limiteAlertaUsd` del usuario que operó (o del `UMBRAL_MONTO_USD` si no configuró uno), escribe `Notificación enviada al usuario …`. En una actualización, solo si el monto cambió | Redis |
+
+```
+[INFO] SuscriptorProyecciones: Evento ACTIVO_CREADO procesado (c6bbaaea-…, activo 9502a5a9-…)
+[INFO] SuscriptorNotificaciones: Notificación enviada al usuario auth0|6ae5…: Whale Alert, BTC vale 30000 USD y supera su límite de 10000 USD (ACTIVO_CREADO, evento c6bbaaea-…)
+```
+
+- **Dos conexiones a Redis por suscriptor.** Una conexión que se suscribe queda en modo suscripción y ya no puede ejecutar otros comandos; por eso el suscriptor
+  abre una segunda (`duplicate()`) para escuchar el canal, y la conexión de datos sirve para invalidar, contar y leer preferencias.
+- **Invalida, no escribe.** El suscriptor no guarda en la caché el dato del evento sino que lo borra: dos eventos del mismo activo pueden llegar en un orden
+  distinto del que ocurrieron (los publican distintas instancias de la API) y escribir uno viejo dejaría la caché mal. Borrar nunca deja un dato equivocado.
+- **Idempotente.** Cada registro de auditoría lleva el `idEvento` en un índice único (parcial: solo los documentos que lo tienen). Recibir el mismo evento
+  dos veces audita una sola. Comprobado publicando a mano el mismo evento dos veces: un documento y, en el log, *ya estaba auditado: se ignora*.
+- **Un mensaje malo no tumba al suscriptor.** Si no es JSON o no cumple el contrato se descarta con un WARN; si procesarlo falla, se deja el error en el log y
+  se sigue con el próximo. Los eventos se procesan de a uno y en el orden en que llegaron.
+- **Cierre ordenado.** Con SIGTERM (`docker compose stop`) deja de escuchar, termina el evento en curso y cierra Redis y MongoDB.
+- **Reconexión.** Si Redis se cae y vuelve, el suscriptor se suscribe de nuevo solo (se comprobó reiniciando Redis: el `PUBLISH` siguiente volvió a tener
+  2 receptores). Lo ocurrido mientras estuvo caído **no se recupera** (el log lo avisa al reconectar).
+- **En local, sin Docker.** `npm run dev` **no** arranca los suscriptores: hay que levantarlos aparte (`npm run suscriptor:proyecciones` y
+  `npm run suscriptor:notificaciones`, cada uno en su terminal). Sin ellos las escrituras funcionan, pero no se invalida la caché ni se audita ni se
+  avisa nada, y la API lo deja como WARN (`receptores: 0`) en cada operación.
+
+#### El reto: ¿qué pasa si el suscriptor está caído? (Pub/Sub vs BullMQ)
+
+Pub/Sub es *fire and forget*: el mensaje llega a quienes están suscriptos **en ese instante** y Redis no lo guarda. Se comprobó parando el suscriptor de proyecciones:
+
+| | Pub/Sub (suscriptor de proyecciones parado) | BullMQ (worker de reportes parado) |
+|---|---|---|
+| Qué pasa al publicar / encolar | `receptores: 1` (solo el otro suscriptor): el evento **no le llegó** al caído | El trabajo queda **guardado** en Redis, estado `en_cola` |
+| Al volver el proceso | **No se entera de lo que pasó**: el historial no tiene el `CREAR` y la lista cacheada quedó vieja (`X-Cache: HIT` sin el activo nuevo) hasta que venza el TTL | Toma el trabajo pendiente y lo completa (`completado`) |
+| ¿Se reenvía? | No, nunca | Sí, y con reintentos si falla |
+
+La diferencia es el modelo: una **cola** guarda el trabajo hasta que alguien lo hace; un **canal** solo difunde. Pub/Sub es adecuado cuando perder un mensaje
+es tolerable o se corrige solo (acá, la caché se corrige con el TTL); no lo es para la auditoría, que debería ser durable. La mejora es cambiar el canal
+por **Redis Streams** (con grupos de consumidores: el suscriptor retoma desde el último evento que confirmó) o por una cola de BullMQ para la auditoría, y
+publicar con un *Transactional Outbox* para no perder el evento tampoco del lado de la API. Ver [RESPUESTAS-PARTE-7.md](RESPUESTAS-PARTE-7.md).
+
+**Consistencia eventual.** Entre que un comando confirma en MySQL y el suscriptor invalida la caché y escribe la auditoría hay una ventana (milisegundos con los
+suscriptores sanos) en la que una consulta puede devolver el dato anterior o el historial puede no tener todavía la operación. Es el precio de CQRS; el TTL
+(`CACHE_TTL_SEGUNDOS`) acota cuánto puede durar un desfasaje si un evento se pierde. Por eso la colección de Postman espera 300 ms antes de cada pedido.
+
+**Limitaciones conocidas** (consecuencias del diseño, no defectos):
+
+- **Leer lo recién escrito.** Un `DELETE` o un `PUT` seguido al instante de un `GET` puede devolver el dato anterior (`X-Cache: HIT`) hasta que el suscriptor
+  invalide la caché; si el suscriptor está parado o el evento se perdió, hasta que venza el TTL.
+- **El historial puede ir atrasado.** Los registros de auditoría los escribe el suscriptor: una operación puede tardar en aparecer, y si el suscriptor estuvo caído
+  **nunca aparece**. En el caso extremo de un activo cuyos eventos nunca se auditaron y que ya se eliminó, `GET /api/activos/:id/historial` responde 404 como si el id
+  nunca hubiera existido.
+- **Orden entre instancias.** El registro se ordena por la hora en que se **publicó** el evento. Si dos `PUT` del mismo activo los atienden instancias distintas, pueden
+  publicarse en otro orden del real y el historial mostrarlos invertidos (el `antes` y el `despues` de cada uno son correctos). Haría falta un número de secuencia por activo.
+- **Sin alarma de eventos sin receptores.** Hoy es un WARN en el log de la API; no hay un chequeo de salud ni una métrica que avise que no hay suscriptores.
+
+---
+
 ## Roles y modo pánico
 
 La autenticación responde *quién sos* (401 si no se sabe); la **autorización** responde *qué podés hacer* (**403** si se
@@ -466,7 +595,7 @@ Todos los de `/api` requieren `Authorization: Bearer <token>` y un **rol** que l
 |---|---|---|---|---|
 | GET | `/salud` | Health check (**público**, sin token) | 200 | — |
 | GET | `/api/yo` | Quién es el usuario del token y qué roles tiene (cualquier usuario autenticado) | 200 | 401 |
-| GET | `/api/activos` | Lista los activos (`?simbolo=BTC` filtra) | 200 | — |
+| GET | `/api/activos` | Lista los activos (`?simbolo=BTC` filtra). Sale de Redis; header `X-Cache: HIT` o `MISS` | 200 | — |
 | GET | `/api/activos/:id` | Obtiene un activo (con caché: header `X-Cache: HIT` o `MISS`) | 200 | 404 |
 | POST | `/api/activos` | Crea un activo | 201 | 400, 409, 502 |
 | PUT | `/api/activos/:id` | Reemplaza un activo | 200 | 400, 404, 409, 502 |
@@ -481,7 +610,7 @@ Todos los de `/api` requieren `Authorization: Bearer <token>` y un **rol** que l
 | DELETE | `/api/admin/cache` | Vacía la caché de activos (solo `activo:*`). **ADMIN** | 200 | 403, 503 |
 | GET | `/api/admin/modo-panico` | Estado del modo pánico. **ADMIN** | 200 | 403, 503 |
 | PUT | `/api/admin/modo-panico` | Activa o apaga el modo pánico (`{"activo": true}`). **ADMIN** | 200 | 400, 403, 503 |
-| GET | `/api/estadisticas` | Reportes exitosos y los 5 activos más consultados (Redis) | 200 | 503 |
+| GET | `/api/estadisticas` | Reportes exitosos, eventos de activos procesados por tipo y los 5 activos más consultados (Redis) | 200 | 503 |
 | GET | `/api/preferencias` | Las preferencias del usuario del token (Redis) | 200 | 403, 503 |
 | PUT | `/api/preferencias` | Cambia las preferencias del usuario enviadas (`monedaVisualizacion`, `limiteAlertaUsd`) | 200 | 400, 503 |
 
@@ -720,21 +849,23 @@ src/
 │   ├── modelos/activoModelo.ts    # modelo Sequelize de la tabla activos
 │   ├── migraciones/               # cambios de esquema versionados (up / down)
 │   └── migrar.ts, migrarCli.ts    # ejecutor de migraciones (Umzug) y su comando
+├── eventos/                       # contrato del evento (eventoActivo.ts), publicador y suscriptores (crearSuscriptor, crearProyecciones, crearNotificaciones) de Redis Pub/Sub
 ├── seguridad/                     # verificadorJwt (jose, JWKS), autenticacion, autorizar (roles), modoPanico, permisos (la matriz), usuarioActual
 ├── colas/colaReportes.ts          # la cola de BullMQ vista desde la API (productor)
 ├── reportes/                      # generarReporte, procesadorReporte, eventosWorker, estadoReporte (sin Redis ni bases: dependencias por parámetro)
-├── procesos/workerReportes.ts     # punto de entrada del worker (proceso aparte)
+├── procesos/                      # puntos de entrada de los procesos aparte: workerReportes, suscriptorProyecciones, suscriptorNotificaciones (+ ejecutarSuscriptor, lo común)
 ├── pipeline/
 │   ├── pipeline.ts                # runner genérico: Filtro y Pipeline
 │   ├── ingesta/                   # validación → normalización → conversión de moneda
 │   └── analisis/                  # depuración → riesgo → formato
 ├── validaciones/activoValidacion.ts
 ├── servicios/
-│   ├── activosServicio.ts         # reglas de negocio del CRUD (usa el pipeline de ingesta)
+│   ├── comandos/                  # lado de ESCRITURA (CQRS): crearComandosActivos (valida, persiste en MySQL y publica; + su cableado)
+│   ├── consultas/                 # lado de LECTURA (CQRS): crearConsultasActivos, lee de Redis y cae a MySQL
 │   ├── analisisServicio.ts        # usa el pipeline de análisis
-│   ├── crearServicioAuditoria.ts  # registrar (mejor esfuerzo) y consultar el historial
+│   ├── crearServicioAuditoria.ts  # consultar el historial (y registrar, de mejor esfuerzo: lo usan los reportes)
 │   ├── auditoriaServicio.ts       # esa fábrica ya conectada a MongoDB y al logger
-│   ├── crearCacheActivos.ts       # caché cache-aside (String + TTL) y ranking (Sorted Set), de mejor esfuerzo
+│   ├── crearCacheActivos.ts       # modelo de lectura: activo (String + TTL), lista completa y ranking (Sorted Set), de mejor esfuerzo
 │   ├── cacheActivosServicio.ts    # esa fábrica ya conectada a Redis
 │   ├── crearServicioPreferencias.ts, preferenciasServicio.ts   # preferencias (Hash de Redis)
 │   ├── crearServicioReportes.ts, reportesServicio.ts           # pedir y consultar reportes (productor de la cola)
@@ -744,7 +875,7 @@ src/
 ├── controladores/                 # activos, auditoría, preferencias y reportes
 ├── rutas/activosRutas.ts
 ├── errores/ErrorApi.ts
-├── utilidades/                    # redondear.ts, camposModificados.ts
+├── utilidades/                    # redondear.ts, camposModificados.ts, whaleAlert.ts (la regla de la alerta, compartida)
 └── middlewares/                   # manejadorErrores.ts y autenticacion.ts (Bearer + JWT)
 
 herramientas/idpFalso.ts           # proveedor de identidad falso (solo desarrollo; no entra en la imagen)
@@ -759,10 +890,10 @@ el repositorio no sabe de negocio.**
 Flujo de una petición:
 
 ```
-Cliente → rutas → controlador → servicio → pipeline de ingesta → repositorio → MySQL
-                                    │            └──→ tasasServicio → API de tipo de cambio
-                                    │            └──→ auditoría → MongoDB (mejor esfuerzo)
-                                    │            └──→ caché → Redis (GET por id; mejor esfuerzo)
+Cliente → rutas → controlador → COMANDOS → pipeline de ingesta → repositorio → MySQL
+                      │              │            └──→ tasasServicio → API de tipo de cambio
+                      │              │            └──→ PUBLISH → Redis Pub/Sub (mejor esfuerzo) ··· suscriptores: caché, auditoría → MongoDB, Whale Alert
+                      ├────→ CONSULTAS → caché → Redis (modelo de lectura) ··· si no está → MySQL
                                     ├────→ preferencias → Redis
                                     └────→ reportes → cola (BullMQ/Redis) ··· worker → preciosServicio + MongoDB
                                     ├────→ pipeline de análisis (lote → reporte)
@@ -784,7 +915,7 @@ Cualquier throw de ErrorApi → manejadorErrores → { "error": { ... } }
 1. Levantar la API (`npm run dev`).
 2. En Postman: **Import** → seleccionar
    [`postman/portafolio-cripto.postman_collection.json`](postman/portafolio-cripto.postman_collection.json).
-3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 70 de
+3. Ejecutar los requests en orden, o usar el **Collection Runner** para correr los 76 de
    una sola vez. Los tres primeros (`T1` a `T3`) piden los tokens al proveedor de identidad: hace falta un **entorno**
    (`postman/entorno-local.postman_environment.json.ejemplo` para Auth0, o `postman/entorno-idp-falso.postman_environment.json`
    para el proveedor falso). Ver [AUTH0.md](AUTH0.md). Los requests del reporte necesitan el worker corriendo (`npm run worker` o el compose).
@@ -868,7 +999,7 @@ curl http://localhost:3000/api/ruta-inexistente                           # 404
 | El healthcheck de Mongo se autentica | El `mongod` temporal de la inicialización no tiene autenticación y respondería "sano" a un ping anónimo antes de que exista el usuario. |
 | El healthcheck de MySQL prueba por TCP (`127.0.0.1`) | Con un volumen nuevo, la imagen arranca un servidor temporal que solo atiende por socket y que con `localhost` se veía "sano": la API intentaba conectarse antes de tiempo, fallaba y dependía de que `restart` la levantara de nuevo. |
 | La API del compose espera a que las bases estén `healthy` | `depends_on` con `condition: service_healthy`: no arranca contra una base que todavía no atiende. |
-| La auditoría es de mejor esfuerzo | No hay transacción entre MySQL y MongoDB: si el historial falla, la operación ya confirmada no se deshace ni se le falla al cliente. Se paga con posibles operaciones sin registro. |
+| La auditoría es de mejor esfuerzo (y la escribe un suscriptor) | No hay transacción entre MySQL y MongoDB: si el historial falla, la operación ya confirmada no se deshace ni se le falla al cliente. Se paga con posibles operaciones sin registro. |
 | Tiempo máximo de 2 s para registrar | Con MongoDB caído, el driver tardaría 5 s en rendirse en cada escritura; así la demora es acotada. |
 | El historial se lee antes de borrar y sin tocar MySQL | El `ELIMINAR` guarda cómo era el activo; la consulta funciona aunque ya no exista. |
 | Consultas de historial con MongoDB caído → 503 | No es un bug de la API (500) sino un servicio del que depende que no está disponible. |
@@ -884,6 +1015,17 @@ curl http://localhost:3000/api/ruta-inexistente                           # 404
 | El modo pánico falla cerrado | Si no se puede leer el interruptor se rechazan las escrituras (503): ante la duda, durante un incidente, no se escribe. |
 | Limpiar la caché con `SCAN` + borrado de `activo:*`, nunca `FLUSHALL` | Redis guarda también la cola, las preferencias, los contadores y el modo pánico; vaciarlo todo en un incidente los perdería. |
 | Preferencias por usuario (`preferencias:<sub>`), con el `sub` del token | Nadie puede leer ni cambiar las de otro: el id sale del token verificado, nunca del pedido. |
+| CQRS: servicios de comandos y de consultas separados, con sus dependencias por parámetro | Cada lado se prueba sin MySQL, Redis ni red, y se puede cambiar un modelo sin tocar el otro. |
+| Un comando publica el evento DESPUÉS de confirmar en MySQL, y publicar es de mejor esfuerzo | Nunca se anuncia algo que no ocurrió; y MySQL ya confirmó, así que fallarle al cliente por un evento no tiene sentido. Se paga con eventos que pueden perderse. |
+| El evento tiene un contrato versionado y se valida al publicar y al recibir | Publicador y suscriptores no se conocen, pero comparten esa forma. El canal no garantiza nada de quien escribe en él. |
+| Los suscriptores son procesos aparte (misma imagen, otro comando), uno por tarea | Se pueden parar, reiniciar o escalar por separado y la API no sabe que existen. Si uno falla o está caído, el otro sigue. |
+| El suscriptor de proyecciones INVALIDA la caché, no escribe el dato del evento | Los eventos de un mismo activo pueden llegar en otro orden del que ocurrieron (los publican distintas instancias de la API): escribir uno viejo dejaría la caché mal hasta el TTL. Invalidar nunca deja un dato equivocado: la próxima lectura va a MySQL. |
+| La auditoría de un evento es idempotente (índice único parcial en `idEvento`) | Si el mismo evento llega dos veces (o un suscriptor se reinicia a mitad), no se duplica el historial. Parcial para que los registros viejos y los reportes, que no tienen `idEvento`, no choquen entre sí. |
+| Cada suscriptor usa DOS conexiones a Redis (`subscribe` y `duplicate()`) | Una conexión suscripta queda en modo suscripción y no puede ejecutar otros comandos; los datos (invalidar, contar, leer preferencias) van por la otra. |
+| Un evento por vez y en orden de llegada; uno inválido o que falla no frena a los demás | Un ACTIVO_ACTUALIZADO no se aplica antes que el ACTIVO_CREADO que lo precede. Pub/Sub no reenvía, así que reintentar no es posible: se deja el error en el log y se sigue. |
+| Las Whale Alert usan el límite de cada usuario y, si no hay, el umbral general | Es lo que el usuario configuró en sus preferencias; si no se pueden leer (Redis caído) rige el umbral general: una alerta con el límite por defecto vale más que ninguna. |
+| La lista completa se cachea como un solo valor y el filtro por símbolo se aplica en memoria | El portafolio es chico; un solo `GET` de Redis sirve cualquier filtro sin ir a la base. |
+| El precio (`/precio`) toma el activo del modelo de lectura pero nunca cachea la cotización | El activo es un dato propio que cambia por comandos; la cotización es de un tercero y cambia sola. |
 | Autenticación delegada en un proveedor de identidad (Auth0) y la API solo verifica | La API no maneja contraseñas ni sesiones; el token es *stateless*, así que sirve igual con una instancia que con diez (Parte 8). |
 | Algoritmo fijo (`RS256`) y `iss`/`aud`/`exp` obligatorios | Sin la lista cerrada de algoritmos, `alg: none` o la confusión HS256/RS256 podrían pasar. |
 | Los roles se leen de un claim configurable, y los desconocidos se descartan | No se ata la app a un proveedor ni se confía en roles inventados. |
@@ -925,7 +1067,7 @@ sin compilar en desarrollo y compilado en producción:
 - Rate limiting (limitar cuántos pedidos por minuto puede hacer cada usuario o IP): hoy un usuario con permiso puede saturar la API o la cola de reportes.
 - Registrar en MongoDB (y no solo en el log) quién activó el modo pánico y quién limpió la caché.
 - Deduplicar pedidos de reporte repetidos y respetar el `Retry-After` de CoinGecko al reintentar.
-- Invalidación robusta de la caché de activos: hoy depende del TTL si Redis está caído durante un `PUT` o un `DELETE`.
+- Invalidación robusta de la caché de activos: hoy depende del TTL si el evento se pierde (Redis caído al publicar o suscriptor detenido). Con *Redis Streams* (o un *Transactional Outbox*) el suscriptor retomaría desde donde quedó.
 - Caché de ~60 s para las cotizaciones (en Redis, ahora que está disponible), y así no golpear el *rate limit*
   gratuito de CoinGecko.
 - Resolver los símbolos vía `/coins/list` en vez del mapa fijo (se evitó porque descarga

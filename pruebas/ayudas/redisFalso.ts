@@ -13,7 +13,9 @@ export function crearRedisFalso() {
   const rankings = new Map<string, Map<string, number>>();
   const ttl = new Map<string, number>();
   const comandos: string[] = [];
-  const estado = { caido: false };
+  const publicados: { canal: string; mensaje: string }[] = [];
+  // `receptores` es lo que devuelve PUBLISH: cuantos suscriptores recibieron el mensaje.
+  const estado = { caido: false, receptores: 0 };
 
   function usar(comando: string): void {
     comandos.push(comando);
@@ -87,11 +89,23 @@ export function crearRedisFalso() {
       hashes.set(clave, { ...hash, ...campos });
       return nuevos;
     },
+    async publish(canal, mensaje) {
+      usar(`PUBLISH ${canal}`);
+      publicados.push({ canal, mensaje });
+      return estado.receptores;
+    },
+    async hIncrBy(clave, campo, incremento) {
+      usar(`HINCRBY ${clave} ${campo} ${incremento}`);
+      const hash = hashes.get(clave) ?? {};
+      const nuevo = Number(hash[campo] ?? "0") + incremento;
+      hashes.set(clave, { ...hash, [campo]: String(nuevo) });
+      return nuevo;
+    },
     async hGetAll(clave) {
       usar(`HGETALL ${clave}`);
       return { ...(hashes.get(clave) ?? {}) };
     },
   };
 
-  return { redis, textos, hashes, rankings, ttl, comandos, estado };
+  return { redis, textos, hashes, rankings, ttl, comandos, estado, publicados };
 }

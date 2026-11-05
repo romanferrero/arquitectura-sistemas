@@ -25,6 +25,11 @@ export type RegistroAuditoria = {
   /** Solo en ACTUALIZAR: que campos cambiaron. */
   camposModificados?: string[];
   metadatos?: Record<string, unknown>;
+  /**
+   * El evento de Pub/Sub que origino este registro (lo escribe el suscriptor de proyecciones). Es
+   * unico: asi un mismo evento recibido dos veces se audita una sola vez.
+   */
+  idEvento?: string;
   ocurridoEn: string;
 };
 
@@ -34,6 +39,8 @@ export type RegistroAuditoria = {
  */
 export type NuevoRegistroAuditoria = Omit<RegistroAuditoria, "id" | "entidad" | "ocurridoEn"> & {
   entidad?: EntidadAuditoria;
+  /** Cuando ocurrio la operacion; si no se indica, es el momento de registrarla. */
+  ocurridoEn?: string;
 };
 
 /** Filtros de la consulta del historial general. */
