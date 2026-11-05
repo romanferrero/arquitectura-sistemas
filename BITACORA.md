@@ -25,7 +25,7 @@ usó ninguna skill.
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
 correr la colección de Postman, **Docker Compose**, **Jest** y pruebas de mutación hechas a mano.
 
-Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9 a 13 y
+Los modelos usados: Opus 5.5 en la planificación (sesiones 0 y 8) y Sonnet 5.5 en la implementación (sesiones 1 a 7, 9 a 14 y
 las revisiones). Esfuerzo alto en todo, salvo la sesión 8 (planificación de las Partes 5 a 8), que fue extra alto.
 
 ---
@@ -1011,3 +1011,70 @@ proveedor caído y sin claves en memoria. La consigna de la skill está en ingl�
 **Pendientes**
 - Sesión 14: los **suscriptores** (proyecciones: caché, ranking y auditoría; y notificaciones de Whale Alert), la demostración de la pérdida de mensajes,
   `RESPUESTAS-PARTE-7.md`, las revisiones y el cierre de la Parte 7.
+
+---
+
+## Sesión 14 — Pub/Sub: suscriptores y cierre de la Parte 7 · 2026-11-04
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto. El plan sugería Opus 5.5 para esta sesión (consistencia asíncrona); el estudiante respondió "dale" a
+  "¿sigo con la sesión 14?" sin pedir otro modelo, así que siguió la misma sesión y el mismo modelo que las 9 a 13.
+- **Modo:** implementación, en `feature/sesion-14-pubsub`.
+- **Herramientas:** edición de archivos, Docker Compose (los siete servicios), `curl` con **tokens reales de Auth0**, `redis-cli` (`PUBLISH`), `mongosh`,
+  Newman y mutaciones a mano. Sin skills ni subagentes (las revisiones del cierre de la parte van en su propia entrada).
+
+**Qué se hizo**
+- **Los comandos quedaron en lo que pide el patrón:** validan, persisten en MySQL y publican. Ya no reciben la caché ni la auditoría.
+- **Dos suscriptores, procesos aparte** (misma imagen, otro comando; servicios `suscriptor-proyecciones` y `suscriptor-notificaciones` en el compose, scripts
+  `npm run suscriptor:*`). La mecánica común es [`crearSuscriptor`](src/eventos/crearSuscriptor.ts) (valida el contrato, descarta lo inválido, un evento por vez y en
+  orden) y [`ejecutarSuscriptor`](src/procesos/ejecutarSuscriptor.ts) (dos conexiones a Redis, reconexión, cierre ordenado).
+  - **Proyecciones** ([`crearProyecciones`](src/eventos/crearProyecciones.ts)): invalida la entrada y la lista, saca del ranking al eliminado, cuenta el evento
+    (`HINCRBY estadisticas:eventos-activos`) y **audita en Mongo de forma idempotente** por `idEvento` (índice único parcial).
+  - **Notificaciones** ([`crearNotificaciones`](src/eventos/crearNotificaciones.ts)): la Whale Alert con el límite de cada usuario o el umbral general. La regla
+    (`monto > umbral`) se extrajo a [`whaleAlert.ts`](src/utilidades/whaleAlert.ts) y la comparte el análisis de riesgo.
+- `GET /api/estadisticas` suma `eventosActivos` (por tipo). El publicador avisa con **WARN** cuando hay 0 receptores (la sesión 13 lo había dejado como pendiente).
+- **El reto** de la letra, demostrado con Docker (suscriptor parado vs worker de BullMQ parado), y la documentación: README (suscriptores, reto, consistencia
+  eventual), [`RESPUESTAS-PARTE-7.md`](RESPUESTAS-PARTE-7.md) y `CLAUDE.md`.
+- Postman: el contador de eventos en `GET /api/estadisticas` y una espera de 300 ms antes de cada pedido (consistencia eventual).
+- `jest.config.js`: `maxWorkers: 2` (ver Hallazgos).
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| Los comandos **dejan** de invalidar la caché y de auditar; lo hacen los suscriptores | Claude, según el plan y la letra | La letra pide que el comando solo valide y persista. Costo: si el evento se pierde, la caché queda vieja hasta el TTL y la operación no se audita |
+| El suscriptor **invalida** la caché en vez de escribir el dato del evento | Claude | Los eventos de un activo pueden llegar en otro orden del que ocurrieron (los publican varias instancias): escribir uno viejo dejaría la caché mal; invalidar nunca deja un dato equivocado. La letra dice "actualizar el caché": se cumple en el sentido del cache-aside |
+| La auditoría del suscriptor es **idempotente** (índice único parcial en `idEvento`) | Claude | Un evento repetido no debe duplicar el historial; parcial para que los registros viejos y los reportes no choquen |
+| Un evento por vez y en orden de llegada (cola en memoria dentro del suscriptor) | Claude | Que un `ACTUALIZADO` no se aplique antes que el `CREADO` previo. El costo es menos paralelismo, que a este volumen no importa |
+| El suscriptor de proyecciones **no conecta MySQL** | Claude | Solo invalida; no reconstruye desde la base. Menos dependencias y arranque más simple |
+| La Whale Alert se dispara en `CREADO` y en `ACTUALIZADO` solo si el **monto cambió** | Claude | Cambiar solo el nombre de una posición grande no debería avisar de nuevo |
+| Sin preferencia del usuario (o si Redis falla al leerla) rige `UMBRAL_MONTO_USD` | Claude | Una alerta con el límite por defecto vale más que ninguna |
+| WARN (y no INFO) con 0 receptores | Claude | Ahora la caché y la auditoría dependen de que alguien escuche |
+| Agregar `eventosActivos` a `/api/estadisticas` | Claude | Un contador que nadie puede leer no sirve; es un campo nuevo, no rompe a quien ya consumía la respuesta |
+| `maxWorkers: 2` en Jest | Claude | La suite entera se quedaba sin memoria en esta máquina |
+
+**Verificación**
+- `npm run check`, `npm run build` y `npm test`: 39 suites, **496 tests** en verde (44 nuevos: suscriptor, proyecciones, notificaciones, regla de la alerta, duplicado de
+  Mongo, estadísticas y publicador). Cuatro corridas seguidas de la suite completa en verde.
+- **Con Auth0 real y Docker (siete servicios sanos):** un alta, un cambio y una baja → 3 eventos con `receptores: 2`; el historial tiene `CREAR`, `ACTUALIZAR` y
+  `ELIMINAR` escritos por el suscriptor; el `GET` posterior al `PUT` es `MISS` y trae el dato nuevo; la Whale Alert aparece en el log de notificaciones con el límite
+  del usuario (10.000 USD); `/api/estadisticas` cuenta los eventos por tipo; el índice único parcial existe en Mongo.
+- **Idempotencia:** el mismo evento publicado dos veces con `redis-cli` → 1 documento y el log *ya estaba auditado: se ignora*. Un mensaje que no es JSON se descartó con
+  un WARN y el suscriptor siguió vivo.
+- **El reto:** con el suscriptor de proyecciones parado, el `POST` dio 201 y la API registró `receptores: 1`; la lista cacheada siguió en `HIT` sin el activo nuevo; al
+  volver el suscriptor el historial **no** tenía el `CREAR` (no se reenvía). Con el worker de BullMQ parado, el reporte quedó `en_cola` y al volver pasó a `completado`.
+- **Reinicio de Redis con los suscriptores corriendo:** se reconectaron solos y el `PUBLISH` siguiente tuvo 2 receptores; un alta posterior quedó auditada.
+- Newman con Auth0 real, dos corridas: 81 requests, **162 aserciones, 0 fallas**.
+- **Mutaciones (18):** no invalidar la lista o la entrada, el ranking al revés, el contador que suma 2, una operación equivocada, no mandar `idEvento` ni la fecha, un
+  suscriptor sin cola o que no descarta lo inválido o al que el error del manejador le rompe la cola, alertar con monto igual al umbral o al eliminar o aunque el monto no
+  cambie, ignorar las preferencias o dejar que fallen, 0 receptores sin WARN, eventos faltantes valiendo 1 y el código de duplicado equivocado. **Una sobrevivió** (alertar
+  al eliminar: la baja ya estaba cubierta por la falta de `despues`, pero el contrato permite un `ELIMINADO` con `despues`) → se agregó ese caso al test y las 18 quedaron detectadas.
+
+**Hallazgos**
+- **Jest se quedaba sin memoria** (`worker ran out of memory`) con un proceso por núcleo (16) y Docker corriendo, en una máquina de 8 GB con unos 300 MB libres; con
+  `maxWorkers: 4` todavía falló una vez y con 2 pasó 4 corridas seguidas.
+- **Tres requests de Postman** (leer justo después de escribir) dependían de que la auditoría y la caché fueran inmediatas. Pasaron, pero por suerte: se agregó la espera.
+- Una vez, en mi guion del reto, el `POST` no devolvió un `id`; al repetir el escenario anduvo y no quedó rastro en los logs de la API. No se pudo atribuir a una causa; queda
+  anotado como observación, no como defecto confirmado.
+
+**Pendientes**
+- `/code-review` (y `/security-review`) de la Parte 7, corregir lo que salga, el OK del estudiante para el merge a `main` y el **mensaje para el profesor** (el primero que se envía).
