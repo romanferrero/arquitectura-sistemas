@@ -3,7 +3,6 @@ import { SimboloDuplicadoError } from "../../src/datos/simboloDuplicadoError.ts"
 import { ErrorApi } from "../../src/errores/ErrorApi.ts";
 import type { DatosEventoActivo } from "../../src/eventos/eventoActivo.ts";
 import type { Activo, DatosActivo } from "../../src/modelos/activo.ts";
-import type { NuevoRegistroAuditoria } from "../../src/modelos/auditoria.ts";
 import type { ConversionMoneda } from "../../src/pipeline/ingesta/tipos.ts";
 import { crearComandosActivos } from "../../src/servicios/comandos/crearComandosActivos.ts";
 import type { RepositorioDeEscritura } from "../../src/servicios/comandos/crearComandosActivos.ts";
@@ -23,13 +22,12 @@ const bitcoin: Activo = {
 
 /**
  * Todo falso y en memoria: un repositorio que se comporta como MySQL (simbolo unico, fila que puede
- * desaparecer) y, para comprobar el ORDEN de lo que pasa despues de confirmar, un registro compartido
- * de llamadas a la cache, la auditoria y el publicador.
+ * desaparecer) y, para comprobar lo que pasa despues de confirmar, un registro compartido de llamadas
+ * a MySQL y al publicador. El comando no recibe cache ni auditoria: de eso se encargan los suscriptores.
  */
 function armar(cambios: { ingestar?: (cuerpo: unknown) => Promise<{ datos: DatosActivo; conversion: ConversionMoneda | undefined }> } = {}) {
   const filas = new Map<string, Activo>();
   const llamadas: string[] = [];
-  const auditados: NuevoRegistroAuditoria[] = [];
   const publicados: DatosEventoActivo[] = [];
   let siguienteId = 0;
 
@@ -60,17 +58,6 @@ function armar(cambios: { ingestar?: (cuerpo: unknown) => Promise<{ datos: Datos
     ingestar:
       cambios.ingestar ??
       (async (cuerpo) => ({ datos: cuerpo as DatosActivo, conversion: undefined })),
-    auditoria: {
-      registrar: async (registro) => {
-        llamadas.push("auditoria");
-        auditados.push(registro);
-      },
-    },
-    cache: {
-      invalidar: async (id) => void llamadas.push(`cache:invalidar:${id}`),
-      invalidarLista: async () => void llamadas.push("cache:invalidarLista"),
-      quitarDelRanking: async (id) => void llamadas.push(`cache:ranking:${id}`),
-    },
     publicador: {
       publicar: async (evento) => {
         llamadas.push(`evento:${evento.tipo}`);
@@ -81,7 +68,7 @@ function armar(cambios: { ingestar?: (cuerpo: unknown) => Promise<{ datos: Datos
     ahora: () => AHORA,
   });
 
-  return { comandos, filas, llamadas, auditados, publicados };
+  return { comandos, filas, llamadas, publicados };
 }
 
 async function errorDe(promesa: Promise<unknown>): Promise<ErrorApi> {
@@ -106,12 +93,12 @@ describe("comandos · crearActivo", () => {
     expect(filas.get("id-nuevo-1")).toEqual(creado);
   });
 
-  test("después de confirmar en MySQL: invalida la lista, audita y PUBLICA el evento, en ese orden", async () => {
+  test("después de confirmar en MySQL solo PUBLICA el evento: ni toca la caché ni audita", async () => {
     const { comandos, llamadas } = armar();
 
     await comandos.crearActivo(datosEth, ANA);
 
-    expect(llamadas).toEqual(["mysql:guardar", "cache:invalidarLista", "auditoria", "evento:ACTIVO_CREADO"]);
+    expect(llamadas).toEqual(["mysql:guardar", "evento:ACTIVO_CREADO"]);
   });
 
   test("el evento lleva el activo creado, quién lo hizo y desde dónde", async () => {
@@ -124,17 +111,16 @@ describe("comandos · crearActivo", () => {
     ]);
   });
 
-  test("la conversión de moneda viaja en la auditoría y en el evento", async () => {
+  test("la conversión de moneda viaja en el evento", async () => {
     const conversion: ConversionMoneda = { monedaOriginal: "EUR", precioOriginal: 1800, tasa: 1.11 };
-    const { comandos, auditados, publicados } = armar({ ingestar: async () => ({ datos: datosEth, conversion }) });
+    const { comandos, publicados } = armar({ ingestar: async () => ({ datos: datosEth, conversion }) });
 
     await comandos.crearActivo({}, ANA);
 
-    expect(auditados[0]?.metadatos).toEqual({ origen: "API", usuario: ANA, conversionMoneda: conversion });
     expect(publicados[0]?.metadatos).toEqual({ origen: "API", usuario: ANA, conversionMoneda: conversion });
   });
 
-  test("un símbolo repetido da 409 y NO deja rastro: ni caché, ni auditoría, ni evento", async () => {
+  test("un símbolo repetido da 409 y NO deja rastro: ni evento", async () => {
     const { comandos, filas, llamadas } = armar();
     filas.set("id-btc", bitcoin);
 
@@ -167,8 +153,6 @@ describe("comandos · crearActivo", () => {
         eliminar: async () => false,
       },
       ingestar: async () => ({ datos: datosEth, conversion: undefined }),
-      auditoria: { registrar: async () => void llamadas.push("auditoria") },
-      cache: { invalidar: async () => undefined, invalidarLista: async () => void llamadas.push("lista"), quitarDelRanking: async () => undefined },
       publicador: { publicar: async () => void llamadas.push("evento") },
       generarId: () => "x",
       ahora: () => AHORA,
@@ -191,17 +175,17 @@ describe("comandos · actualizarActivo", () => {
     expect(despues).toEqual({ id: "id-btc", ...nuevos, creadoEn: bitcoin.creadoEn, actualizadoEn: AHORA.toISOString() });
   });
 
-  test("invalida la entrada y la lista, audita y publica el evento, en ese orden", async () => {
+  test("después de confirmar en MySQL solo publica el evento", async () => {
     const { comandos, filas, llamadas } = armar();
     filas.set("id-btc", bitcoin);
 
     await comandos.actualizarActivo("id-btc", nuevos, ANA);
 
-    expect(llamadas).toEqual(["mysql:reemplazar", "cache:invalidar:id-btc", "cache:invalidarLista", "auditoria", "evento:ACTIVO_ACTUALIZADO"]);
+    expect(llamadas).toEqual(["mysql:reemplazar", "evento:ACTIVO_ACTUALIZADO"]);
   });
 
   test("el evento lleva el antes y el después REALES y los campos que cambiaron", async () => {
-    const { comandos, filas, publicados, auditados } = armar();
+    const { comandos, filas, publicados } = armar();
     filas.set("id-btc", bitcoin);
 
     const despues = await comandos.actualizarActivo("id-btc", nuevos, ANA);
@@ -214,7 +198,6 @@ describe("comandos · actualizarActivo", () => {
       camposModificados: ["cantidad", "precioCompra"],
       metadatos: { origen: "API", usuario: ANA },
     });
-    expect(auditados[0]?.camposModificados).toEqual(["cantidad", "precioCompra"]);
   });
 
   test("un id que no existe da 404 sin gastar el pipeline ni publicar", async () => {
@@ -258,21 +241,14 @@ describe("comandos · actualizarActivo", () => {
 });
 
 describe("comandos · eliminarActivo", () => {
-  test("borra el activo, limpia caché, lista y ranking, audita y publica el evento, en ese orden", async () => {
+  test("borra el activo y después solo publica el evento", async () => {
     const { comandos, filas, llamadas } = armar();
     filas.set("id-btc", bitcoin);
 
     await comandos.eliminarActivo("id-btc", ANA);
 
     expect(filas.has("id-btc")).toBe(false);
-    expect(llamadas).toEqual([
-      "mysql:eliminar",
-      "cache:invalidar:id-btc",
-      "cache:invalidarLista",
-      "cache:ranking:id-btc",
-      "auditoria",
-      "evento:ACTIVO_ELIMINADO",
-    ]);
+    expect(llamadas).toEqual(["mysql:eliminar", "evento:ACTIVO_ELIMINADO"]);
   });
 
   test("el evento lleva como era el activo antes de borrarse", async () => {

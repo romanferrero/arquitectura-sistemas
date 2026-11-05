@@ -2,7 +2,6 @@ import { SimboloDuplicadoError } from "../../datos/simboloDuplicadoError.ts";
 import { ErrorApi } from "../../errores/ErrorApi.ts";
 import type { DatosEventoActivo } from "../../eventos/eventoActivo.ts";
 import type { Activo, DatosActivo } from "../../modelos/activo.ts";
-import type { NuevoRegistroAuditoria } from "../../modelos/auditoria.ts";
 import type { ConversionMoneda } from "../../pipeline/ingesta/tipos.ts";
 import { camposModificados } from "../../utilidades/camposModificados.ts";
 
@@ -22,14 +21,10 @@ const CAMPOS_EDITABLES = ["simbolo", "nombre", "cantidad", "precioCompra"] as co
  * negocio, persiste en MySQL (la fuente de verdad) y avisa que paso. No devuelve vistas ni lee de la
  * cache: eso es trabajo de las consultas (`crearConsultasActivos`).
  *
- * Despues de que MySQL confirma, y siempre DE MEJOR ESFUERZO (nada de esto puede deshacer lo ya
- * guardado ni hacer fallar la operacion):
- *  1. deja la cache al dia (invalida la entrada y la lista);
- *  2. registra la auditoria en MongoDB;
- *  3. PUBLICA un evento en Redis Pub/Sub, para que otras partes del sistema reaccionen.
- *
- * Los pasos 1 y 2 estan aca POR AHORA, directamente. En la siguiente sesion los hacen los
- * suscriptores al recibir el evento, y el comando queda en lo que pide el patron: validar, persistir y publicar.
+ * Despues de que MySQL confirma PUBLICA un evento en Redis Pub/Sub (de mejor esfuerzo: no puede deshacer lo ya
+ * guardado ni hacer fallar la operacion) y nada mas. Dejar la cache al dia, llevar los contadores y
+ * registrar la auditoria lo hacen los SUSCRIPTORES al recibir el evento (`crearProyecciones`): el comando
+ * no sabe que existen. Es lo que pide el patron: validar, persistir y publicar.
  *
  * Es una FABRICA con todas sus dependencias por parametro: se prueba sin MySQL, Redis, MongoDB ni red.
  */
@@ -37,19 +32,13 @@ export function crearComandosActivos(dependencias: {
   repositorio: RepositorioDeEscritura;
   /** Validacion, normalizacion y conversion de moneda (el pipeline de ingesta). */
   ingestar: (cuerpo: unknown) => Promise<{ datos: DatosActivo; conversion: ConversionMoneda | undefined }>;
-  auditoria: { registrar: (registro: NuevoRegistroAuditoria) => Promise<void> };
-  cache: {
-    invalidar: (id: string) => Promise<void>;
-    invalidarLista: () => Promise<void>;
-    quitarDelRanking: (id: string) => Promise<void>;
-  };
   publicador: { publicar: (evento: DatosEventoActivo) => Promise<void> };
   generarId: () => string;
   ahora: () => Date;
 }) {
-  const { repositorio, ingestar, auditoria, cache, publicador, generarId, ahora } = dependencias;
+  const { repositorio, ingestar, publicador, generarId, ahora } = dependencias;
 
-  /** Quien lo hizo, desde donde y, si hubo, la conversion de moneda: va a la auditoria y al evento. */
+  /** Quien lo hizo, desde donde y, si hubo, la conversion de moneda: viaja en el evento (y de ahi, a la auditoria). */
   function metadatosDe(usuario: string, conversion: ConversionMoneda | undefined) {
     return conversion === undefined
       ? { origen: "API", usuario }
@@ -80,10 +69,8 @@ export function crearComandosActivos(dependencias: {
         throw error;
       }
 
-      // MySQL ya confirmo: lo que sigue es de mejor esfuerzo.
+      // MySQL ya confirmo: se avisa (de mejor esfuerzo) y listo.
       const metadatos = metadatosDe(usuario, conversion);
-      await cache.invalidarLista(); // un activo nuevo deja vieja la lista cacheada
-      await auditoria.registrar({ operacion: "CREAR", entidadId: creado.id, despues: creado, metadatos });
       await publicador.publicar({ tipo: "ACTIVO_CREADO", activoId: creado.id, despues: creado, metadatos });
       return creado;
     },
@@ -118,32 +105,18 @@ export function crearComandosActivos(dependencias: {
       const { antes, despues } = reemplazo;
       const metadatos = metadatosDe(usuario, conversion);
       const modificados = camposModificados(antes, despues, CAMPOS_EDITABLES);
-      await cache.invalidar(id); // la proxima lectura trae el dato nuevo
-      await cache.invalidarLista();
-      await auditoria.registrar({
-        operacion: "ACTUALIZAR",
-        entidadId: despues.id,
-        antes,
-        despues,
-        camposModificados: modificados,
-        metadatos,
-      });
       await publicador.publicar({ tipo: "ACTIVO_ACTUALIZADO", activoId: despues.id, antes, despues, camposModificados: modificados, metadatos });
       return despues;
     },
 
     async eliminarActivo(id: string, usuario: string): Promise<void> {
-      // Se lee antes de borrar: el historial y el evento tienen que guardar como era el activo.
+      // Se lee antes de borrar: el evento (y con el, el historial) tiene que guardar como era el activo.
       const actual = await obtenerActivo(id);
       if (!(await repositorio.eliminar(id))) {
         throw new ErrorApi(404, `No existe un activo con id ${id}`); // lo borro otro mientras tanto
       }
 
       const metadatos = { origen: "API", usuario };
-      await cache.invalidar(id);
-      await cache.invalidarLista();
-      await cache.quitarDelRanking(id);
-      await auditoria.registrar({ operacion: "ELIMINAR", entidadId: id, antes: actual, metadatos });
       await publicador.publicar({ tipo: "ACTIVO_ELIMINADO", activoId: id, antes: actual, metadatos });
     },
   };

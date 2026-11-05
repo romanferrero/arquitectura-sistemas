@@ -49,7 +49,13 @@ export function crearPublicador(dependencias: {
 
       try {
         const receptores = await redis.publish(canal, JSON.stringify(evento));
-        registrador.info(`Evento ${evento.tipo} publicado (${evento.idEvento}, activo ${evento.activoId}, receptores: ${receptores})`);
+        const detalle = `${evento.tipo} publicado (${evento.idEvento}, activo ${evento.activoId}, receptores: ${receptores})`;
+        if (receptores === 0) {
+          // Nadie lo recibio: ni la cache se va a invalidar ni la auditoria se va a escribir (las hacen los suscriptores).
+          registrador.warn(`Evento ${detalle}: ningún suscriptor lo recibió y no se va a reenviar`);
+        } else {
+          registrador.info(`Evento ${detalle}`);
+        }
       } catch (error) {
         registrador.error(`No se pudo publicar el evento ${evento.tipo} de ${evento.activoId}: ${describirError(error)}`);
       }

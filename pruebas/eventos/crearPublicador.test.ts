@@ -72,12 +72,16 @@ describe("crearPublicador", () => {
     expect(lineas).toEqual([`[INFO] Eventos: Evento ACTIVO_CREADO publicado (${ID_EVENTO}, activo id-btc, receptores: 2)`]);
   });
 
-  test("con 0 receptores igual publica (nadie escuchaba) y lo dice en el log", async () => {
-    const { publicador, lineas } = armar();
+  test("con 0 receptores igual publica pero lo avisa como WARN: nadie lo procesó y no se reenvía", async () => {
+    const { publicador, publicados, lineas } = armar();
 
     await publicador.publicar(creado);
 
+    expect(publicados).toHaveLength(1);
+    expect(lineas).toHaveLength(1);
+    expect(lineas[0]).toContain("[WARN] Eventos:");
     expect(lineas[0]).toContain("receptores: 0");
+    expect(lineas[0]).toContain("ningún suscriptor lo recibió");
   });
 
   test("con Redis caído NO rechaza: la operación que lo originó ya se confirmó en MySQL", async () => {
