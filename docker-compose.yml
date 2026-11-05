@@ -34,6 +34,7 @@ services:
       <<: *entorno_en_docker
       MIGRAR_AL_ARRANCAR: "false"
       PM2_INSTANCES: ${PM2_INSTANCES:-max}
+      PM2_MAX_MEMORY: ${PM2_MAX_MEMORY:-512M}
     ports:
       - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
     depends_on:
