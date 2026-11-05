@@ -13,7 +13,7 @@ name: portafolio-cripto
 
 # Lo que cambia DENTRO de la red de Docker: alli las bases no estan en localhost sino bajo el
 # nombre de su servicio, y se llega por el puerto interno del contenedor (no por el que se
-# publica al host). Lo comparten la API y el worker.
+# publica al host). Lo comparten la API, el worker y los suscriptores.
 x-entorno-en-docker: &entorno_en_docker
   MYSQL_HOST: mysql
   MYSQL_PORT: "3306"
@@ -66,6 +66,37 @@ services:
         condition: service_healthy
     # `docker compose stop` manda SIGTERM: el worker termina el reporte en curso antes de salir.
     stop_grace_period: 40s
+    restart: unless-stopped
+
+  # Los dos SUSCRIPTORES del canal `activos-actualizaciones` (Pub/Sub): MISMA imagen que la API, otro comando,
+  # un proceso por cada uno. Cada uno recibe TODOS los eventos y hace lo suyo: las proyecciones dejan la cache
+  # al dia y registran la auditoria; las notificaciones avisan de las Whale Alert. No publican puertos ni
+  # necesitan a la API ni a MySQL. Si uno esta parado, los eventos de ese lapso se pierden (ver README).
+  suscriptor-proyecciones:
+    build: .
+    image: portafolio-cripto-api
+    command: ["node", "dist/procesos/suscriptorProyecciones.js"]
+    env_file: .env
+    environment: *entorno_en_docker
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # `docker compose stop` manda SIGTERM: termina el evento en curso antes de salir.
+    stop_grace_period: 15s
+    restart: unless-stopped
+
+  suscriptor-notificaciones:
+    build: .
+    image: portafolio-cripto-api
+    command: ["node", "dist/procesos/suscriptorNotificaciones.js"]
+    env_file: .env
+    environment: *entorno_en_docker
+    depends_on:
+      redis:
+        condition: service_healthy
+    stop_grace_period: 15s
     restart: unless-stopped
 
   mysql:
