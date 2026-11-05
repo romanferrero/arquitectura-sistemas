@@ -112,6 +112,7 @@ de `pm2 monit` se sacan a mano (es interactivo): *pendiente del estudiante*; com
 - **Fijar límites de memoria por contenedor** (`mem_limit`) y un `oom_score_adj` bajo para MySQL: que ante falta de memoria el kernel (o Docker) elija a la API y no a la base.
 - **Escalar fuera de la máquina**: la API en su propio host (o varias réplicas detrás de un balanceador) y las bases aparte; es donde el cluster dejaría de competir por recursos.
 - **Balanceo real** (Nginx, un *ingress* o un balanceador de nube) en lugar del reparto por turnos de PM2, con *health checks* por instancia y `least_conn`.
+- **Guardar 1 o 2 segundos el resultado de `/salud`**: es público y cada pedido consulta las tres bases; con la caché, ni las sondas ni un tercero pueden multiplicar la carga sobre ellas ni el ruido en el log.
 - **Compartir las claves de Auth0 (JWKS) por Redis**, o seguir usando las viejas si la descarga falla: con varias instancias arrancando a la vez es la causa de los 503 sueltos en un `reload`.
 - **Arranque en paralelo**: con `wait_ready` las instancias arrancan una por una (~2 min para 16); un `listen_timeout` más corto o arrancar en tandas lo acortaría.
 - **Métricas de verdad** (Prometheus + Grafana, o `k6` hacia InfluxDB) en lugar de capturas de `pm2 monit`: series en el tiempo de CPU, memoria, latencias y reinicios.

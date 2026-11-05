@@ -644,6 +644,10 @@ migrando al arrancar.
   (se vio en el reload: 3 de 470 con 4 instancias; entre 0,5 % y 1 % con 16, donde además la CPU saturada hacía vencer chequeos y conexiones). Una mejora sería compartir las claves por Redis o seguir usando las viejas si la descarga falla.
 - **Un reload con 16 instancias** tardó entre 2,5 y 3,5 minutos (una por una) en esta máquina.
 - **Conexiones a MySQL:** 16 instancias × el pool de 5 de Sequelize = 80 conexiones (el límite del servidor es 151).
+- **`/salud` no tiene caché:** cada pedido hace un `authenticate` a MySQL y un `ping` a MongoDB y a Redis. Con las sondas de Docker (cada 10 s) no pesa, pero como es público cualquiera puede repetirlo, y con la API caída escribe hasta tres líneas de error por pedido. Mejora posible: guardar el último resultado 1 o 2 segundos.
+- **La precarga de claves puede demorar el arranque:** con el proveedor de identidad caído, cada instancia reintenta hasta unos 11 s antes de decir `ready` (y las instancias arrancan de a una). Es de mejor esfuerzo: si no se pueden bajar, la instancia arranca igual.
+- **`SHUTDOWN_TIMEOUT_MS` y Docker:** el `stop_grace_period` del compose (25 s) tiene que ser mayor que `SHUTDOWN_TIMEOUT_MS` + 2 s; si se sube la variable hay que subir también ese valor.
+- **El `.env` y PM2:** `ecosystem.config.cjs` lo carga él mismo (el CLI de PM2 no lo hace), así que `PM2_INSTANCES`, `PM2_MAX_MEMORY` y `SHUTDOWN_TIMEOUT_MS` puestos solo en el `.env` rigen también con `npm run cluster`; una variable ya definida en el entorno gana sobre el `.env`.
 
 ## Pruebas de carga (k6)
 
@@ -655,7 +659,7 @@ migrando al arrancar.
 | `escritura` | 20 | `POST /api/activos` (en USD) y `DELETE` del mismo activo | Pipeline + MySQL + evento publicado |
 
 No hay pausa entre pedidos (cada usuario manda el siguiente apenas recibe la respuesta), así que mide el máximo que aguanta el sistema, no un uso normal. Umbrales: p95 < 500 ms, fallas < 1 %, **0 respuestas 5xx**.
-El `setup()` pide el token de un TRADER (igual que Postman, por *password grant*) y siembra 20 activos; el `teardown()` los borra. Los contadores `instancia_N` cuentan cuántas respuestas atendió cada instancia (`X-Instancia`) y `tasa_cache_hit` cuántas lecturas salieron de Redis.
+El `setup()` pide el token de un TRADER (igual que Postman, por *password grant*) y siembra 20 activos (símbolos `ZZS00` a `ZZS19`; los de escritura son `ZZ<usuario>X<vuelta>`); el `teardown()` los borra. Antes de sembrar solo limpia lo que dejó una corrida anterior **de esta prueba** (símbolo con prefijo `ZZ` y su nombre propio): un portafolio con activos reales no se toca. Los contadores `instancia_N` cuentan cuántas respuestas atendió cada instancia (`X-Instancia`) y `tasa_cache_hit` cuántas lecturas salieron de Redis.
 
 ```bash
 # Token: o CARGA_TOKEN, o CARGA_URL_IDP / CARGA_CLIENT_ID / CARGA_USUARIO / CARGA_CLAVE en el .env (ver .env.example)
