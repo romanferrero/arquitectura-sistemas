@@ -2,20 +2,28 @@ import { describirError } from "../datos/describirError.ts";
 import type { ComandosRedis } from "../datos/tiposRedis.ts";
 import { ErrorApi } from "../errores/ErrorApi.ts";
 import type { Activo } from "../modelos/activo.ts";
+import { TIPOS_EVENTO_ACTIVO } from "../eventos/eventoActivo.ts";
+import type { TipoEventoActivo } from "../eventos/eventoActivo.ts";
 import type { Registrador } from "../pipeline/pipeline.ts";
 import { CLAVE_RANKING } from "./crearCacheActivos.ts";
 
 /** Contador global de reportes generados con exito. Lo incrementa el worker con INCR. */
 export const CLAVE_REPORTES_EXITOSOS = "estadisticas:reportes-exitosos";
 
+/** Hash con cuantos eventos de cada tipo proceso el suscriptor de proyecciones (HINCRBY, un campo por tipo). */
+export const CLAVE_EVENTOS_ACTIVOS = "estadisticas:eventos-activos";
+
 export type Estadisticas = {
   reportesExitosos: number;
+  /** Eventos de activos procesados por el suscriptor, por tipo (0 si ninguno o si el suscriptor nunca corrio). */
+  eventosActivos: Record<TipoEventoActivo, number>;
   masConsultados: { id: string; simbolo?: string; consultas: number }[];
 };
 
 /**
  * Estadisticas globales de la aplicacion, guardadas en Redis:
  *  - cuantos reportes se generaron con exito (un contador atomico, INCR);
+ *  - cuantos eventos de activos proceso el suscriptor, por tipo (un Hash, HINCRBY);
  *  - los activos mas consultados (el Sorted Set del ranking).
  *
  * Es un estado COMPARTIDO: lo escriben distintos procesos (el worker cuenta los reportes, la
@@ -33,10 +41,12 @@ export function crearServicioEstadisticas(dependencias: {
   return {
     async obtener(): Promise<Estadisticas> {
       let contador: string | null;
+      let eventos: Record<string, string>;
       let ranking: { value: string; score: number }[];
       try {
-        [contador, ranking] = await Promise.all([
+        [contador, eventos, ranking] = await Promise.all([
           redis.get(CLAVE_REPORTES_EXITOSOS),
+          redis.hGetAll(CLAVE_EVENTOS_ACTIVOS),
           redis.zRangeWithScores(CLAVE_RANKING, 0, cantidadMasConsultados - 1, { REV: true }),
         ]);
       } catch (error) {
@@ -57,7 +67,10 @@ export function crearServicioEstadisticas(dependencias: {
             : { id: value, simbolo: activo.simbolo, consultas: score };
         }),
       );
-      return { reportesExitosos: Number(contador ?? 0), masConsultados };
+      const eventosActivos = Object.fromEntries(
+        TIPOS_EVENTO_ACTIVO.map((tipo) => [tipo, Number(eventos[tipo] ?? 0)]),
+      ) as Record<TipoEventoActivo, number>;
+      return { reportesExitosos: Number(contador ?? 0), eventosActivos, masConsultados };
     },
   };
 }

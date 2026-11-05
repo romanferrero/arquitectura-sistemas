@@ -94,6 +94,13 @@ export function crearRedisFalso() {
       publicados.push({ canal, mensaje });
       return estado.receptores;
     },
+    async hIncrBy(clave, campo, incremento) {
+      usar(`HINCRBY ${clave} ${campo} ${incremento}`);
+      const hash = hashes.get(clave) ?? {};
+      const nuevo = Number(hash[campo] ?? "0") + incremento;
+      hashes.set(clave, { ...hash, [campo]: String(nuevo) });
+      return nuevo;
+    },
     async hGetAll(clave) {
       usar(`HGETALL ${clave}`);
       return { ...(hashes.get(clave) ?? {}) };
