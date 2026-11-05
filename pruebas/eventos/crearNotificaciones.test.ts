@@ -127,4 +127,12 @@ describe("notificaciones · qué eventos alertan", () => {
     expect(notificadas(lineas)).toEqual([]);
     expect(consultadas).toEqual([]);
   });
+
+  test("ni siquiera un ELIMINADO que (aunque el contrato lo permite) traiga `despues` con un monto enorme", async () => {
+    const { notificaciones, lineas } = armar({ "auth0|ana": 1 });
+
+    await notificaciones.notificar({ ...eventoEliminado, despues: activoDePrueba });
+
+    expect(notificadas(lineas)).toEqual([]);
+  });
 });
