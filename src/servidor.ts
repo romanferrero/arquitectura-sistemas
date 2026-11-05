@@ -6,6 +6,7 @@ import { describirError } from "./datos/describirError.ts";
 import { cerrarColaReportes } from "./colas/colaReportes.ts";
 import { cerrarRedis, conectarRedis } from "./datos/redis.ts";
 import { migrar } from "./datos/migrar.ts";
+import { precargarClaves } from "./seguridad/autenticacion.ts";
 import { salud } from "./servicios/saludServicio.ts";
 
 /**
@@ -13,7 +14,7 @@ import { salud } from "./servicios/saludServicio.ts";
  *   1. conecta MySQL,
  *   2. aplica las migraciones pendientes (solo si MIGRAR_AL_ARRANCAR no es false),
  *   3. conecta MongoDB,
- *   4. conecta Redis,
+ *   4. conecta Redis y precarga las claves del proveedor de identidad,
  *   5. recien entonces pone la app a escuchar y le avisa a PM2 que esta lista.
  *
  * Si algo de lo anterior falla, la API NO arranca: es mejor cortar con un mensaje
@@ -45,6 +46,8 @@ async function arrancar(): Promise<void> {
 
   await conectarRedis();
   logger.info("Redis conectado");
+
+  await precargarClaves(); // que el primer pedido autenticado de la instancia no espere al proveedor
 
   const servidor = app.listen(env.PORT, () => {
     logger.info(`API de portafolio escuchando en http://localhost:${env.PORT} (instancia ${instancia()}, pid ${process.pid})`);
