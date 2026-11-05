@@ -13,7 +13,7 @@ El plan de las Partes 3 y 4 (ya en `main`) está archivado en [PLAN-PARTES-3-4.m
 - [x] Sesión 13 — CQRS: comandos, consultas y publicación de eventos
 - [x] Sesión 14 — Pub/Sub: suscriptores y cierre de la **Parte 7** (**Parte 7 en `main`**)
 - [x] Sesión 15 — PM2 cluster, salud, cierre ordenado y monitor de reinicios
-- [x] Sesión 16 — Pruebas de carga y cierre de la **Parte 8** (hecha; falta la revisión final, el merge a `main` y el mensaje al profesor)
+- [x] Sesión 16 — Pruebas de carga y cierre de la **Parte 8** (hecha y revisada; falta el OK del estudiante para el merge a `main` y el mensaje al profesor)
 
 ## Contexto
 
