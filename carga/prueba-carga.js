@@ -65,6 +65,14 @@ function contarInstancia(respuesta) {
   if (respuesta.status >= 500) errores5xx.add(1);
 }
 
+/** Deja en el log (de a pocas por usuario) los pedidos que no dieron lo esperado, para saber que paso. */
+let avisos = 0;
+function avisarSiFalla(respuesta, esperado, que) {
+  if (respuesta.status === esperado || avisos >= 5) return;
+  avisos += 1;
+  console.warn(`${que}: respondio ${respuesta.status} (se esperaba ${esperado}) ${String(respuesta.body).slice(0, 120)}`);
+}
+
 function pedirToken() {
   if (__ENV.TOKEN) return __ENV.TOKEN;
   const respuesta = http.post(
@@ -112,6 +120,7 @@ export function leer(datos) {
   const respuesta = http.get(`${URL_BASE}/api/activos/${id}`, encabezados(datos.token));
   contarInstancia(respuesta);
   tasaCacheHit.add(respuesta.headers["X-Cache"] === "HIT");
+  avisarSiFalla(respuesta, 200, "lectura");
   check(respuesta, { "lectura: 200": (r) => r.status === 200 });
   if (PAUSA_S > 0) sleep(PAUSA_S);
 }
@@ -123,11 +132,13 @@ export function escribir(datos) {
 
   const creado = http.post(`${URL_BASE}/api/activos`, JSON.stringify(cuerpo), opciones);
   contarInstancia(creado);
+  avisarSiFalla(creado, 201, "POST");
   const sePudoCrear = check(creado, { "escritura: POST 201": (r) => r.status === 201 });
   if (!sePudoCrear) return;
 
   const borrado = http.del(`${URL_BASE}/api/activos/${creado.json("id")}`, null, opciones);
   contarInstancia(borrado);
+  avisarSiFalla(borrado, 204, "DELETE");
   check(borrado, { "escritura: DELETE 204": (r) => r.status === 204 });
   if (PAUSA_S > 0) sleep(PAUSA_S);
 }
