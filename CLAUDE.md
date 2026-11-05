@@ -39,6 +39,7 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
 | `docker compose up -d --wait mysql mongodb redis` | Solo las bases (la API con `npm run dev`) |
 | `npm run idp:falso` | Proveedor de identidad falso (solo desarrollo): sirve las claves y emite tokens de prueba sin cuenta de Auth0 |
 | `npm run worker` | Worker de la cola de reportes (BullMQ); en Docker es el servicio `worker-reportes` |
+| `npm run cluster` | La API en cluster de PM2 (`ecosystem.config.cjs`, hace falta `npm run build`); en Docker corre así por defecto |
 | `npm run suscriptor:proyecciones` / `suscriptor:notificaciones` | Los dos suscriptores del canal de eventos (Pub/Sub); en Docker son los servicios `suscriptor-proyecciones` y `suscriptor-notificaciones` |
 | `npm run migrar` / `migrar:deshacer` / `migrar:estado` | Migraciones de MySQL |
 | `npm run db:verificar` | Comprueba que la app llegue a las tres bases |
@@ -89,4 +90,10 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
   es la Whale Alert (`src/utilidades/whaleAlert.ts` es la regla, compartida con el análisis de riesgo). Cada suscriptor usa dos conexiones a Redis (`subscribe` y
   `duplicate()`). Pub/Sub no guarda mensajes: con un suscriptor caído el evento se pierde (la caché se corrige con el TTL; la auditoría no). **Toda escritura nueva
   tiene que publicar su evento**; el que lo necesite se suscribe, el comando no sabe quién escucha.
+- PM2 y salud (Parte 8): la API corre en **cluster** (`ecosystem.config.cjs`, es `.cjs` por el `"type": "module"`); el worker y los suscriptores, **una** instancia
+  cada uno (con Pub/Sub cada copia recibiría todos los eventos). En Docker cada contenedor corre `pm2-runtime --only <proceso>`. La API avisa `process.send("ready")`
+  (`wait_ready`) y cierra ordenado con SIGINT/SIGTERM (`SHUTDOWN_TIMEOUT_MS` < `kill_timeout`). Las migraciones en Docker las aplica el servicio `migraciones` una vez
+  (`MIGRAR_AL_ARRANCAR=false` en la API). `GET /salud` comprueba MySQL, MongoDB y Redis (200/503, sin detalle de errores: es público); todas las respuestas llevan `X-Instancia`.
+  `instancia()`, `migrarAlArrancar()` y `cierreTimeoutMs()` están en `env.ts` (único lector de `process.env`). El monitor de reinicios usa el contador de PM2
+  (`max_restarts` en 20 a propósito: con 5 PM2 pararía el ciclo antes de que el monitor lo viera).
 - Tests en `pruebas/`, importando `describe`/`test`/`expect` desde `@jest/globals`.
