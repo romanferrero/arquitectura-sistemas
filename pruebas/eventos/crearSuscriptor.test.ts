@@ -113,6 +113,24 @@ describe("crearSuscriptor", () => {
     ]);
   });
 
+  test("una falla inesperada con un mensaje no envenena la cola: el siguiente igual se procesa y esperarPendientes no rechaza", async () => {
+    const manejados: string[] = [];
+    let oyente: (mensaje: string) => void = () => undefined;
+    const suscriptor = crearSuscriptor({
+      conexion: { subscribe: async (_canal, nuevo) => void (oyente = nuevo) },
+      manejar: async (evento) => void manejados.push(evento.tipo),
+      // Un registrador que revienta al avisar un descarte: obliga a `procesar` a rechazar.
+      registrador: { info: () => undefined, error: () => undefined, warn: () => void (() => { throw new Error("el log se rompió"); })() },
+    });
+    await suscriptor.iniciar();
+
+    oyente("esto no es json"); // procesar rechaza: el WARN del descarte lanza
+    oyente(JSON.stringify(eventoCreado));
+    await expect(suscriptor.esperarPendientes()).resolves.toBeUndefined();
+
+    expect(manejados).toEqual(["ACTIVO_CREADO"]);
+  });
+
   test("esperarPendientes sin nada en cola termina enseguida", async () => {
     const { suscriptor } = armar();
 

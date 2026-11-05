@@ -53,7 +53,11 @@ export function crearSuscriptor(dependencias: {
     /** Se suscribe al canal. Desde aca cada mensaje entra en la cola de procesamiento. */
     async iniciar(): Promise<void> {
       await conexion.subscribe(canal, (mensaje) => {
-        cola = cola.then(() => procesar(mensaje));
+        // El .catch es la red de seguridad: una promesa rechazada en la cola dejaria de ejecutar TODOS los
+        // eventos siguientes (el suscriptor seguiria "vivo" pero sin hacer nada).
+        cola = cola
+          .then(() => procesar(mensaje))
+          .catch((error: unknown) => registrador.error(`Error inesperado al procesar un mensaje: ${describirError(error)}`));
       });
       registrador.info(`Suscripto al canal ${canal}`);
     },
