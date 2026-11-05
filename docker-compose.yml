@@ -121,6 +121,38 @@ services:
     stop_grace_period: 20s
     restart: unless-stopped
 
+  # PRUEBA DE CARGA (Parte 8): k6 con 100 usuarios a la vez contra la API. No arranca con `up`: es del perfil `carga`.
+  #   ETIQUETA=cluster-16 docker compose run --rm k6
+  # Pega contra la API por la red de Docker (http://api:PORT) y se autentica con el token de un TRADER: o `CARGA_TOKEN`,
+  # o las variables CARGA_* del .env (ver .env.example), con las que pide el token al proveedor de identidad.
+  # El resumen de cada corrida queda en carga/resultados/<ETIQUETA>.json.
+  k6:
+    image: grafana/k6:latest
+    profiles: ["carga"]
+    environment:
+      URL_BASE: http://api:${PORT:-3000}
+      TOKEN: ${CARGA_TOKEN:-}
+      CARGA_URL_IDP: ${CARGA_URL_IDP:-}
+      CARGA_CLIENT_ID: ${CARGA_CLIENT_ID:-}
+      CARGA_USUARIO: ${CARGA_USUARIO:-}
+      CARGA_CLAVE: ${CARGA_CLAVE:-}
+      CARGA_AUDIENCE: ${CARGA_AUDIENCE:-https://portafolio-cripto/api}
+      USUARIOS_LECTURA: ${USUARIOS_LECTURA:-80}
+      USUARIOS_ESCRITURA: ${USUARIOS_ESCRITURA:-20}
+      DURACION: ${DURACION:-30s}
+      PAUSA_MS: ${PAUSA_MS:-0}
+    volumes:
+      - ./carga:/scripts:ro
+      - ./carga/resultados:/resultados
+    command:
+      - run
+      - --summary-trend-stats=avg,med,p(90),p(95),p(99),max
+      - --summary-export=/resultados/${ETIQUETA:-corrida}.json
+      - /scripts/prueba-carga.js
+    depends_on:
+      api:
+        condition: service_healthy
+
   mysql:
     image: mysql:8.4
     ports:
