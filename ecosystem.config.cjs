@@ -22,6 +22,16 @@
  *   SHUTDOWN_TIMEOUT_MS cuanto espera la API a los pedidos en curso al apagarse (por defecto 10000)
  */
 
+// Este archivo lo evalua el CLI de PM2 (pm2 / pm2-runtime), que NO carga el .env: los hijos si (por node_args), pero
+// PM2_INSTANCES, PM2_MAX_MEMORY y SHUTDOWN_TIMEOUT_MS se leen ACA. Sin esto, un valor puesto solo en el .env se ignoraba
+// en `npm run cluster` (y SHUTDOWN_TIMEOUT_MS quedaba distinto en PM2 y en la API). En Docker no hay .env y las variables
+// ya vienen del entorno; loadEnvFile no pisa las que ya existen.
+try {
+  process.loadEnvFile(".env");
+} catch (error) {
+  if (error.code !== "ENOENT") throw error;
+}
+
 function leerInstancias(valor) {
   if (valor === undefined || valor === "" || valor === "max" || valor === "0") return "max";
   const numero = Number(valor);
@@ -31,7 +41,17 @@ function leerInstancias(valor) {
   return numero;
 }
 
-const cierreMs = Number(process.env.SHUTDOWN_TIMEOUT_MS ?? 10_000);
+// Mismas reglas que `cierreTimeoutMs()` de src/config/env.ts (vacio = por defecto; entero entre 1000 y 60000).
+function leerCierreMs(valor) {
+  if (valor === undefined || valor.trim() === "") return 10_000;
+  const numero = Number(valor);
+  if (!Number.isInteger(numero) || numero < 1_000 || numero > 60_000) {
+    throw new Error(`SHUTDOWN_TIMEOUT_MS invalido: "${valor}" (un entero entre 1000 y 60000)`);
+  }
+  return numero;
+}
+
+const cierreMs = leerCierreMs(process.env.SHUTDOWN_TIMEOUT_MS);
 
 // Lo que comparten todos los procesos.
 const comun = {
@@ -42,10 +62,11 @@ const comun = {
   // umbral del monitor (5 por minuto) A PROPOSITO: con un limite de 5, PM2 pararia el crash loop antes de que el
   // monitor llegara a verlo y avisar.
   max_restarts: 20,
-  max_memory_restart: process.env.PM2_MAX_MEMORY ?? "512M", // tope contra fugas (una instancia con todo el trafico se estabiliza en ~330 MB)
+  max_memory_restart: process.env.PM2_MAX_MEMORY?.trim() || "512M", // tope contra fugas (una instancia con todo el trafico se estabiliza en ~330 MB)
   // Carga el .env si existe (en local); en Docker no hay .env y las variables ya vienen del entorno.
   node_args: "--env-file-if-exists=.env",
   merge_logs: true,
+  // A proposito siempre "production" bajo PM2: lo unico que cambia es el formato del log (JSON, el que se recoge de stdout).
   env: { NODE_ENV: "production" },
 };
 
