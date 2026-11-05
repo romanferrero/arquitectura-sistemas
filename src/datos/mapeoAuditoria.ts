@@ -23,5 +23,6 @@ export function documentoARegistro(documento: DocumentoLeido): RegistroAuditoria
     registro.camposModificados = documento.camposModificados;
   }
   if (documento.metadatos !== undefined) registro.metadatos = documento.metadatos;
+  if (documento.idEvento !== undefined) registro.idEvento = documento.idEvento;
   return registro;
 }
