@@ -260,6 +260,20 @@ describe("comandos · eliminarActivo", () => {
     expect(publicados).toEqual([{ tipo: "ACTIVO_ELIMINADO", activoId: "id-btc", antes: bitcoin, metadatos: { origen: "API", usuario: ANA } }]);
   });
 
+  test("el evento lleva el id REAL del activo aunque el DELETE llegue con el id en otras mayúsculas", async () => {
+    const { comandos, filas, publicados } = armar();
+    filas.set("id-btc", bitcoin);
+    // MySQL compara sin distinguir mayusculas: el repositorio encuentra "ID-BTC" y borra la fila "id-btc".
+    const buscar = filas.get.bind(filas);
+    filas.get = (id) => buscar(id.toLowerCase());
+    const eliminar = filas.delete.bind(filas);
+    filas.delete = (id) => eliminar(id.toLowerCase());
+
+    await comandos.eliminarActivo("ID-BTC", ANA);
+
+    expect(publicados[0]?.activoId).toBe("id-btc");
+  });
+
   test("un id que no existe da 404 y no publica", async () => {
     const { comandos, llamadas } = armar();
 

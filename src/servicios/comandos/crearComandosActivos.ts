@@ -117,7 +117,9 @@ export function crearComandosActivos(dependencias: {
       }
 
       const metadatos = { origen: "API", usuario };
-      await publicador.publicar({ tipo: "ACTIVO_ELIMINADO", activoId: id, antes: actual, metadatos });
+      // El id del evento es el de la fila (`actual.id`) y no el de la URL: MySQL compara los ids sin distinguir
+      // mayusculas, y un DELETE con el id en mayusculas partiria el historial en dos.
+      await publicador.publicar({ tipo: "ACTIVO_ELIMINADO", activoId: actual.id, antes: actual, metadatos });
     },
   };
 }
