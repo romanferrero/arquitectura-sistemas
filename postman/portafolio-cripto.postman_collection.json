@@ -5,6 +5,19 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{tokenTrader}}", "type": "string"}]},
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// La cache y la auditoria las actualizan los SUSCRIPTORES al recibir el evento de Pub/Sub: es consistencia eventual.",
+          "// Se le da un instante al suscriptor antes de cada pedido para que el request siguiente a una escritura vea su efecto.",
+          "setTimeout(function () {}, 300);"
+        ]
+      }
+    }
+  ],
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:3000" },
     { "key": "idActivo", "value": "" },
@@ -1522,7 +1535,11 @@
               "pm.test('200 OK', () => pm.response.to.have.status(200));",
               "const r = pm.response.json();",
               "pm.test('al menos un reporte exitoso', () => pm.expect(r.reportesExitosos).to.be.at.least(1));",
-              "pm.test('el ranking es un array con a lo sumo 5', () => pm.expect(r.masConsultados).to.be.an('array').with.length.at.most(5));"
+              "pm.test('el ranking es un array con a lo sumo 5', () => pm.expect(r.masConsultados).to.be.an('array').with.length.at.most(5));",
+              "pm.test('cuenta los eventos de activos por tipo (los procesa el suscriptor de proyecciones)', () => {",
+              "  pm.expect(r.eventosActivos).to.have.all.keys('ACTIVO_CREADO', 'ACTIVO_ACTUALIZADO', 'ACTIVO_ELIMINADO');",
+              "  pm.expect(r.eventosActivos.ACTIVO_CREADO).to.be.at.least(1);",
+              "});"
             ]
           }
         }
