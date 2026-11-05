@@ -1161,3 +1161,58 @@ Newman con Auth0 real: 81 requests, **162 aserciones, 0 fallas**.
 
 **Pendientes**
 - Sesión 16: pruebas de carga con k6 (una instancia contra el cluster), `RESPUESTAS-PARTE-8.md`, `/code-review` + `/security-review` de la Parte 8, merge a `main` y el **mensaje general al profesor** (Partes 7 y 8, como decidió el estudiante).
+
+
+---
+
+## Sesión 16 — Pruebas de carga con k6 y cierre de la Parte 8 · 2026-11-05
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto (el plan sugería Sonnet 5.5 · alto para esta sesión).
+- **Modo:** implementación, en `feature/sesion-16-carga`. El estudiante apagó Docker Desktop antes de empezar y lo prendió cuando hizo falta; durante la sesión pidió cerrar otro proyecto suyo de Docker que corría en paralelo.
+- **Herramientas:** edición de archivos, Docker Compose, **k6** (imagen `grafana/k6`), `pm2 jlist` y `docker stats` dentro de la VM de Docker, `docker events`, `dmesg` de la VM (`docker run --privileged --pid=host`), Newman con tokens reales de Auth0 y Jest. Los resultados de las skills (`/code-review`, `/security-review`) se anotan abajo cuando se corran.
+
+**Qué se hizo**
+- [`carga/prueba-carga.js`](carga/prueba-carga.js): 100 usuarios virtuales (80 leen `GET /api/activos/:id` desde Redis, 20 hacen `POST` + `DELETE` en USD) durante 30 s, con `setup()` que pide el token de un TRADER (*password grant*, igual que Postman) y siembra 20 activos, y `teardown()` que los borra. Umbrales: p95 < 500 ms, fallas < 1 %, 0 respuestas 5xx. Contadores por instancia (`X-Instancia`) y tasa de `X-Cache: HIT`.
+- Servicio `k6` en el compose (perfil `carga`); variables `CARGA_*` en `.env.example`; los resúmenes van a `carga/resultados/` (ignorada por git).
+- `PM2_MAX_MEMORY` ahora llega al contenedor de la API y su valor por defecto pasa de **300M a 512M**.
+- README (sección *Pruebas de carga*, variables, memoria), [`RESPUESTAS-PARTE-8.md`](RESPUESTAS-PARTE-8.md), `CLAUDE.md`.
+
+**Resultados** (detalle en `RESPUESTAS-PARTE-8.md`; 0 respuestas 5xx y 99,8 a 99,96 % de lecturas desde Redis en todas)
+
+| Instancias | req/s | p95 | Lectura p95 | Escritura p95 |
+|---|---|---|---|---|
+| 1 | 2.695 | 78 ms | 49 ms | 136 ms |
+| 4 | 4.015 | 55 ms | 40 ms | 119 ms |
+| 8 | 4.274 | 54 ms | 42 ms | 155 ms |
+| 16 | **374** | 434 ms | 367 ms | **1,54 s** (no cumple el umbral) |
+
+**Decisiones**
+
+| Decisión | Quién | Motivo |
+|---|---|---|
+| Un solo servicio `k6` con perfil `carga` y `--summary-export` | Claude, según el plan y el laboratorio del profesor | Es el molde del laboratorio y deja los resultados en archivo sin depender de la red |
+| Token de TRADER por *password grant* desde `setup()` (variables `CARGA_*` o `CARGA_TOKEN`) | Claude | Igual que Newman: se prueba con la autenticación real, sin saltearla |
+| Se agregó **8 instancias** a la comparación del plan (1, 4, 16) | Claude | Para tener la curva completa: la meseta entre 4 y 8 se ve recién ahí |
+| **`PM2_MAX_MEMORY` de 300M a 512M** | Claude, a partir de lo medido | Una instancia con todo el tráfico se estabiliza en ~330 MB: con 300M PM2 la reiniciaba sin que hubiera fuga (7 pedidos fallidos) |
+| Se **detuvo** (no se borró) el otro proyecto de Docker | El estudiante lo pidió; Claude lo ejecutó con `docker stop` | Competía por CPU y memoria y alteraba las medidas |
+| Se **cortó y repitió** la medición cuando se detuvo el otro proyecto | Claude | Para que todas las corridas tuvieran las mismas condiciones |
+| Cerrar con `SIGTERM` el `mysqld` huérfano tras el OOM, sin tocar el volumen | Claude | Se verificó antes que era el proceso del contenedor del propio proyecto; después `CHECK TABLE activos` dio OK |
+| **Se recomienda `PM2_INSTANCES=4` en esta máquina**, pero `max` sigue siendo el valor por defecto | Claude | `max` es lo que pide la letra; las mediciones muestran que acá más de 4 no ayuda y con 16 daña |
+| Las capturas de `pm2 monit` las saca el estudiante | Estudiante (según el plan) | Es interactivo; quedan `pm2 jlist` y `docker stats` como respaldo |
+
+**Hallazgos** (todos medidos; ver `RESPUESTAS-PARTE-8.md`, sección 4)
+- **Con 16 instancias bajo carga la máquina no alcanza:** en dos corridas el kernel de la VM mató a MySQL por falta de memoria (`Out of memory: Killed process (mysqld)`) y Docker perdió el rastro del proceso (contenedor en bucle `Restarting (137)`, `mysqld` huérfano bloqueando `ibdata1`). En otra corrida, sin OOM, la prueba se estancó ~25 s (374 req/s, pedidos de hasta 22 s). Dos corridas anteriores, con el otro proyecto prendido y el tope en 300M, habían dado 1.300 a 1.900 req/s sin errores. La causa de la corrida estancada no se pudo determinar (hipótesis: presión de memoria); **el resultado con 16 no es reproducible** en esta máquina.
+- **El rendimiento no escala linealmente:** de 1 a 4 instancias +49 %; de 4 a 8 solo +6 %. El cuello son los recursos compartidos (k6 al 230 % de CPU, MongoDB al 125 %, 3,7 GB de memoria), no el código de la API.
+- **El tope de 300M reiniciaba una instancia sana**; con 4 instancias (cada una a 283–289 MB) estaba al borde.
+- **Mediciones mal hechas y descartadas:** `docker compose run` recreó la API con la configuración por defecto antes de medir (se vio por los contadores `instancia_N`); `up --wait` da la API por lista con la primera instancia; un script de medición que creí detenido seguía corriendo y se pisó con el siguiente. Todo se repitió con verificación del número de instancias, de los reinicios de PM2 y de los contadores por instancia.
+- Falso positivo mío: conté como «reinicios de PM2» las señales `SIGINT` del log de cuando yo paré la API a mano; `pm2 jlist` mostraba 0 reinicios.
+
+**Verificación**
+- `npm run check` y `npm test`: 41 suites, **520 tests** en verde (esta sesión no tocó `src/`).
+- **Newman con Auth0 real y 16 instancias, dos corridas seguidas:** 80 requests, **161 aserciones, 0 fallas**.
+- Stack final: los siete servicios `healthy`/`up`, 16 instancias `online`; MySQL íntegro (`CHECK TABLE activos` OK), el otro proyecto de Docker detenido (no borrado).
+
+**Pendientes**
+- `/code-review` (nivel *high*) y `/security-review` de la Parte 8 (sesiones 15 y 16), con sus arreglos.
+- Las capturas de `pm2 monit` (las saca el estudiante).
+- El OK del estudiante para el merge de `develop` a `main` (cierre de la Parte 8) y el **mensaje general al profesor** (Partes 7 y 8).
