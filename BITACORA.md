@@ -7,7 +7,7 @@ El plan vigente (Partes 5 a 8) está en [PLAN.md](PLAN.md); el de las Partes 3 y
 
 ## Resumen: skills y herramientas usadas
 
-Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron seis veces,
+Las skills son paquetes de instrucciones de Claude Code que se invocan con `/nombre`. Se usaron siete veces,
 siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUDE.md`).
 
 | Skill | Cuándo | Para qué | Resultado |
@@ -18,8 +18,9 @@ siempre al **cerrar una parte**, y la lista se mantiene al día (regla en `CLAUD
 | `/code-review` (nivel *high*) | Cierre de la Parte 5 | Ídem, sobre las sesiones 9 y 10 (Redis, BullMQ y el worker) | 9 hallazgos: 6 corregidos y 3 documentados |
 | `/code-review` (nivel *high*) | Cierre de la Parte 6 | Ídem, sobre las sesiones 11 y 12 (autenticación, roles y modo pánico) | 10 hallazgos: 6 corregidos y 4 documentados |
 | `/security-review` | Cierre de la Parte 6 | Buscar vulnerabilidades en la autenticación y la autorización | Sin vulnerabilidades de alta confianza |
+| `/code-review` (nivel *high*) | Cierre de la Parte 7 | Ídem, sobre las sesiones 13 y 14 (CQRS, eventos y suscriptores) | 10 hallazgos: 5 corregidos y 5 documentados |
 
-Las seis corren en un subproceso aparte (no comparten el contexto de la sesión). En el resto de las sesiones no se
+Las siete corren en un subproceso aparte (no comparten el contexto de la sesión). En el resto de las sesiones no se
 usó ninguna skill.
 
 Otras herramientas, que no son skills: **modo plan** de Claude Code (solo la sesión 0), **Newman** vía `npx` para
@@ -1078,3 +1079,33 @@ proveedor caído y sin claves en memoria. La consigna de la skill está en ingl�
 
 **Pendientes**
 - `/code-review` (y `/security-review`) de la Parte 7, corregir lo que salga, el OK del estudiante para el merge a `main` y el **mensaje para el profesor** (el primero que se envía).
+
+
+---
+
+## Revisión de la Parte 7 · 2026-11-04
+
+- **Modelo / esfuerzo:** Sonnet 5.5 · esfuerzo alto.
+- **Skill:** `/code-review` (nivel *high*) sobre lo que `develop` tenía de más que `main` (sesiones 13 y 14). Corre en un subproceso aparte. La consigna de la skill está
+  en inglés; el informe se entregó y se trabajó en español. **No** se corrió `/security-review`: esta parte no toca autenticación, autorización ni datos de entrada
+  nuevos (el contrato del evento ya valida lo que recibe); queda para el cierre de la Parte 8.
+- **Resultado:** 10 hallazgos. **5 corregidos** (rama `fix/revision-parte-7`) y **5 documentados** como consecuencias del diseño.
+
+| # | Hallazgo | Qué se hizo |
+|---|---|---|
+| 1 | Los comandos ya no invalidan la caché: un `GET` justo después de un `DELETE`/`PUT` puede devolver el dato viejo, y `npm run dev` no arranca los suscriptores | **Documentado.** Es lo que pide la letra (el comando solo persiste y publica). README: "Limitaciones conocidas" y cómo correr los suscriptores en local |
+| 2 | La auditoría del CRUD depende de un suscriptor sin entrega garantizada: se pierden registros si está caído | **Documentado.** Es el límite de Pub/Sub que el reto pide mostrar; mejoras en `RESPUESTAS-PARTE-7.md` (Streams, Outbox) |
+| 3 | `historial` de un activo da 404 si su `ELIMINAR` todavía no se auditó y no hay otros registros | **Documentado** (caso extremo de la consistencia eventual) |
+| 4 | Si `procesar` rechaza alguna vez, la cola de promesas del suscriptor queda rechazada y deja de procesar todo | **Corregido:** el `.catch` en la cola. Test con un registrador que lanza; la mutación (quitar el `.catch`) se detecta |
+| 5 | `ACTIVO_ELIMINADO` se publica con el id de la URL (pueden venir otras mayúsculas) y parte el historial | **Corregido:** usa `actual.id`. Test con un `DELETE` en mayúsculas; mutación detectada. El mismo defecto ya estaba en la auditoría de la sesión 13 |
+| 6 | Si un paso de la caché rechaza, no corren el contador ni la auditoría | **Corregido:** cada operación de la caché va en su propio `paso`. Test con los tres métodos rechazando |
+| 7 | Las señales se atienden recién después de suscribirse; y mensajes en vuelo podrían entrar tras el `unsubscribe` | **Corregido a medias:** los handlers se registran desde el principio. Lo segundo no ocurre: Redis responde en orden, así que lo que llegó antes del `unsubscribe` ya está en la cola. Se dejó un comentario |
+| 8 | El aviso "eventos perdidos mientras estuvo caída" sale también en el primer arranque | **Corregido:** solo se avisa al reconectar, como WARN. Comprobado: arranque limpio sin aviso y, reiniciando Redis, el WARN aparece y el `PUBLISH` siguiente tiene 2 receptores |
+| 9 | Dos `PUT` del mismo activo desde instancias distintas pueden publicarse en otro orden y el historial los muestra invertidos | **Documentado** (README y mejoras: número de secuencia por activo) |
+| 10 | Publicar sin receptores solo deja un WARN: no hay alarma ni chequeo de salud | **Documentado** (README y mejoras) |
+
+**Verificación tras los arreglos:** `check` y **499 tests** en verde (3 nuevos); las 3 mutaciones de los defectos corregidos, detectadas; con Docker: arranque sin el aviso,
+`docker compose stop` de los dos suscriptores en 1 s con salida limpia (código 0) y el log del cierre ordenado, reinicio de Redis con reconexión y resuscripción;
+Newman con Auth0 real: 81 requests, **162 aserciones, 0 fallas**.
+
+**Pendiente:** el OK del estudiante para el merge de `develop` a `main` (cierre de la Parte 7) y el mensaje para el profesor.
