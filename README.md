@@ -355,9 +355,10 @@ Se cargan con el flag **nativo** de Node `--env-file`, sin usar la librería `do
 | `UMBRAL_MONTO_USD` | `100000` | Monto (en USD) que, superado, dispara la *Whale Alert*. Admite 0 |
 | `UMBRAL_VOLATILIDAD` | `80` | Volatilidad (en %) que, superada, marca un activo como `high_risk` |
 | `PM2_INSTANCES` | `max` | Instancias de la API en el cluster: un número o `max` (una por núcleo). Opcional; solo lo usa PM2 |
-| `PM2_MAX_MEMORY` | `300M` | Memoria máxima por instancia antes de que PM2 la reinicie. Opcional |
+| `PM2_MAX_MEMORY` | `512M` | Memoria máxima por instancia antes de que PM2 la reinicie. Opcional |
 | `MIGRAR_AL_ARRANCAR` | `true` | Si la API aplica las migraciones al arrancar. El compose la pone en `false` (las aplica el servicio `migraciones`). Opcional |
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | Cuánto espera la API a los pedidos en curso al apagarse (1000 a 60000). Opcional |
+| `CARGA_TOKEN`, `CARGA_URL_IDP`, `CARGA_CLIENT_ID`, `CARGA_USUARIO`, `CARGA_CLAVE` | (vacías) | Solo para la prueba de carga con k6 (la API no las lee): un token de TRADER, o los datos para pedirlo al proveedor de identidad. Ver *Pruebas de carga* |
 
 Si falta alguna, la aplicación corta el arranque con un mensaje explícito
 (*fail fast*, ver [`src/config/env.ts`](src/config/env.ts)).
@@ -588,7 +589,7 @@ La configuración está en [`ecosystem.config.cjs`](ecosystem.config.cjs) (es `.
 | `suscriptor-proyecciones`, `suscriptor-notificaciones` | fork | 1 cada uno | Con Pub/Sub **cada copia recibiría todos los eventos**: el trabajo se duplicaría |
 | `monitor-reinicios` | fork | 1 | Avisa si una instancia se reinicia demasiado (abajo) |
 
-Lo que define para la API: `autorestart` (si una instancia se cae, PM2 la levanta), `max_memory_restart: 300M` (reinicia la que pasa ese tope: previene fugas),
+Lo que define para la API: `autorestart` (si una instancia se cae, PM2 la levanta), `max_memory_restart: 512M` (reinicia la que pasa ese tope: previene fugas),
 `wait_ready` (la instancia cuenta como lista cuando llama a `process.send("ready")`, después de conectar las tres bases y escuchar) y un `kill_timeout` **mayor** que
 lo que la API espera a los pedidos en curso. En Docker cada contenedor corre `pm2-runtime` (la variante de PM2 para contenedores) con `--only <proceso>`; en local,
 `npm run build` y `npm run cluster`. Para comparar con una sola instancia: `PM2_INSTANCES=1`.
@@ -636,12 +637,48 @@ migrando al arrancar.
 
 ### Qué se midió y qué límites tiene
 
-- **Memoria:** cada instancia usa entre 70 y 160 MB; las 16 suman unos 2 GB. La VM de Docker de esta máquina tiene 3,7 GB: entra, pero justo, y con `max` conviene fijar `PM2_INSTANCES` si la máquina es más chica.
+- **Memoria:** sin tráfico cada instancia usa entre 70 y 160 MB; las 16 suman unos 2 GB. La VM de Docker de esta máquina tiene 3,7 GB: en reposo entra, pero **con 100 usuarios en paralelo no alcanza** (el kernel llegó a matar a MySQL; ver *Pruebas de carga*). Con `max` conviene fijar `PM2_INSTANCES` si la máquina es chica.
+- **`max_memory_restart`:** una instancia que atiende todo el tráfico sube hasta unos 330 MB y se estabiliza, así que el primer tope (300M) la reiniciaba sin que hubiera una fuga (fallaron 7 pedidos). El valor por defecto es ahora **512M**.
 - **Arranque lento:** con `wait_ready` las instancias arrancan **de a una** (unos 6 s cada una); las 16 tardan unos 2 minutos en estar todas. El healthcheck del contenedor da `healthy` cuando responde la primera.
 - **Claves del proveedor de identidad:** cada instancia nueva baja las claves de Auth0 (JWKS). Se **precargan antes de decir `ready`** (con 3 reintentos) para que el primer pedido autenticado no espere. Aun así, si Auth0 responde mal justo cuando varias instancias las bajan a la vez, esos pedidos reciben 503
   (se vio en el reload: 3 de 470 con 4 instancias; entre 0,5 % y 1 % con 16, donde además la CPU saturada hacía vencer chequeos y conexiones). Una mejora sería compartir las claves por Redis o seguir usando las viejas si la descarga falla.
 - **Un reload con 16 instancias** tardó entre 2,5 y 3,5 minutos (una por una) en esta máquina.
 - **Conexiones a MySQL:** 16 instancias × el pool de 5 de Sequelize = 80 conexiones (el límite del servidor es 151).
+
+## Pruebas de carga (k6)
+
+[`carga/prueba-carga.js`](carga/prueba-carga.js) lanza **100 usuarios virtuales a la vez** durante 30 s contra la API, en dos escenarios paralelos:
+
+| Escenario | Usuarios | Qué hace | Camino |
+|---|---|---|---|
+| `lectura` | 80 | `GET /api/activos/:id` de un activo sembrado al azar | Redis (`X-Cache: HIT`) |
+| `escritura` | 20 | `POST /api/activos` (en USD) y `DELETE` del mismo activo | Pipeline + MySQL + evento publicado |
+
+No hay pausa entre pedidos (cada usuario manda el siguiente apenas recibe la respuesta), así que mide el máximo que aguanta el sistema, no un uso normal. Umbrales: p95 < 500 ms, fallas < 1 %, **0 respuestas 5xx**.
+El `setup()` pide el token de un TRADER (igual que Postman, por *password grant*) y siembra 20 activos; el `teardown()` los borra. Los contadores `instancia_N` cuentan cuántas respuestas atendió cada instancia (`X-Instancia`) y `tasa_cache_hit` cuántas lecturas salieron de Redis.
+
+```bash
+# Token: o CARGA_TOKEN, o CARGA_URL_IDP / CARGA_CLIENT_ID / CARGA_USUARIO / CARGA_CLAVE en el .env (ver .env.example)
+PM2_INSTANCES=4 docker compose up -d --wait api          # 1, 4, 8 o max
+# esperar a que estén todas online:  docker compose exec api ./node_modules/.bin/pm2 ls
+PM2_INSTANCES=4 ETIQUETA=instancias-4 docker compose run --rm --no-deps k6
+```
+
+Dos detalles que importan: `docker compose run` **recrea la API con la configuración por defecto** (16 instancias) si no se le pasa la misma `PM2_INSTANCES` o `--no-deps`, y `up --wait` da la API por lista cuando responde la **primera** instancia, no cuando están todas (hay que esperar). El resumen de cada corrida queda en `carga/resultados/<ETIQUETA>.json`.
+Para mirar en vivo: `docker compose exec api ./node_modules/.bin/pm2 monit` (interactivo) o `pm2 jlist`, y `docker stats`.
+
+**Resultados** (esta máquina: 16 núcleos, VM de Docker de 3,7 GB; k6, la API, MySQL, MongoDB y Redis comparten los mismos núcleos y la misma memoria; 0 respuestas 5xx y entre 99,8 % y 99,96 % de lecturas desde Redis en todas):
+
+| Instancias | req/s | p50 | p95 | p99 | Lectura p95 | Escritura p95 | CPU de la API |
+|---|---|---|---|---|---|---|---|
+| 1 | 2.695 | 29 ms | 78 ms | 119 ms | 49 ms | 136 ms | 133 % |
+| 4 | 4.015 | 17 ms | 55 ms | 122 ms | 40 ms | 119 ms | 633 % |
+| 8 | 4.274 | 13 ms | 54 ms | 159 ms | 42 ms | 155 ms | 836 % |
+| 16 | **374** | 17 ms | 434 ms | 1,59 s | 367 ms | 1,54 s | 348 % |
+
+Lo que se ve: pasar de 1 a 4 instancias sube el rendimiento un 49 % (no un 300 %); de 4 a 8, un 6 %; y con 16 **empeora**: la corrida se frenó unos 25 s y hubo pedidos de hasta 22 s. Más procesos no son más rendimiento cuando todos comparten los mismos núcleos y la misma memoria con el generador de carga (k6 llegó al 230 % de CPU) y con las bases (MongoDB al 125 % por la auditoría de cada escritura). En otras corridas con 16 instancias el kernel de la VM **mató a MySQL por falta de memoria** (`Out of memory: Killed process (mysqld)`, dos veces) y Docker perdió el rastro de ese proceso; hubo que cerrarlo a mano. Con 16 instancias la API sola ocupa entre 1,4 y 2,1 GB de los 3,7 GB.
+Por eso en esta máquina **se recomienda `PM2_INSTANCES=4`**; `max` sigue siendo el valor por defecto porque es lo que pide la letra.
+El detalle, las limitaciones de la medición y la interpretación están en [`RESPUESTAS-PARTE-8.md`](RESPUESTAS-PARTE-8.md).
 
 ## Nombres: de la letra al proyecto
 
