@@ -39,6 +39,7 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
 | `docker compose up -d --wait mysql mongodb redis` | Solo las bases (la API con `npm run dev`) |
 | `npm run idp:falso` | Proveedor de identidad falso (solo desarrollo): sirve las claves y emite tokens de prueba sin cuenta de Auth0 |
 | `npm run worker` | Worker de la cola de reportes (BullMQ); en Docker es el servicio `worker-reportes` |
+| `npm run suscriptor:proyecciones` / `suscriptor:notificaciones` | Los dos suscriptores del canal de eventos (Pub/Sub); en Docker son los servicios `suscriptor-proyecciones` y `suscriptor-notificaciones` |
 | `npm run migrar` / `migrar:deshacer` / `migrar:estado` | Migraciones de MySQL |
 | `npm run db:verificar` | Comprueba que la app llegue a las tres bases |
 
@@ -78,8 +79,14 @@ del curso de Arquitectura de Software. Se trabaja por sesiones siguiendo [PLAN.m
   falla si se agrega una ruta sin permiso: **toda ruta nueva tiene que figurar en esa tabla**. Las rutas que escriben llevan
   `...puedeEscribir` (rol + modo pánico). El modo pánico vive en Redis (`modo_panico`) y falla cerrado. El `sub` del usuario va
   a `metadatos.usuario` de la auditoría; las preferencias son por usuario. Limpiar la caché borra solo `activo:*`, nunca `FLUSHALL`.
-- CQRS (Parte 7): lo que **modifica** va en `src/servicios/comandos/` (valida, persiste en MySQL y publica un evento) y lo que **lee** en
-  `src/servicios/consultas/` (Redis primero, MySQL solo si el dato no está). Son fábricas con todo por parámetro y los controladores eligen a cuál llamar.
-  Los eventos de activos viajan por el canal `activos-actualizaciones` con el contrato de `src/eventos/eventoActivo.ts` (versionado, validado al publicar
-  y al recibir). Publicar es de mejor esfuerzo y nunca rechaza. Una escritura nueva tiene que invalidar la entrada y la lista cacheadas.
+- CQRS (Parte 7): lo que **modifica** va en `src/servicios/comandos/` (valida, persiste en MySQL y publica un evento: **nada más**; no toca la caché ni la
+  auditoría) y lo que **lee** en `src/servicios/consultas/` (Redis primero, MySQL solo si el dato no está). Son fábricas con todo por parámetro y los
+  controladores eligen a cuál llamar. Los eventos de activos viajan por el canal `activos-actualizaciones` con el contrato de `src/eventos/eventoActivo.ts`
+  (versionado, validado al publicar y al recibir). Publicar es de mejor esfuerzo y nunca rechaza.
+- Suscriptores (Parte 7): son procesos aparte (`src/procesos/suscriptor*.ts`, misma imagen, otro comando) con la lógica en `src/eventos/` (`crearSuscriptor`,
+  `crearProyecciones`, `crearNotificaciones`: fábricas con todo por parámetro). **Proyecciones** invalida la caché (`activo:<id>` y `activos:todos`; invalida, no
+  escribe el dato del evento), cuenta en `estadisticas:eventos-activos` y audita en Mongo de forma idempotente por `idEvento` (índice único parcial). **Notificaciones**
+  es la Whale Alert (`src/utilidades/whaleAlert.ts` es la regla, compartida con el análisis de riesgo). Cada suscriptor usa dos conexiones a Redis (`subscribe` y
+  `duplicate()`). Pub/Sub no guarda mensajes: con un suscriptor caído el evento se pierde (la caché se corrige con el TTL; la auditoría no). **Toda escritura nueva
+  tiene que publicar su evento**; el que lo necesite se suscribe, el comando no sabe quién escucha.
 - Tests en `pruebas/`, importando `describe`/`test`/`expect` desde `@jest/globals`.
