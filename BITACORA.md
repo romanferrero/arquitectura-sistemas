@@ -1036,7 +1036,7 @@ proveedor caído y sin claves en memoria. La consigna de la skill está en ingl�
 - **El reto** de la letra, demostrado con Docker (suscriptor parado vs worker de BullMQ parado), y la documentación: README (suscriptores, reto, consistencia
   eventual), [`RESPUESTAS-PARTE-7.md`](RESPUESTAS-PARTE-7.md) y `CLAUDE.md`.
 - Postman: el contador de eventos en `GET /api/estadisticas` y una espera de 300 ms antes de cada pedido (consistencia eventual).
-- `jest.config.js`: `maxWorkers: 2` (ver Hallazgos).
+- `jest.config.js`: `maxWorkers: 1` (ver Hallazgos).
 
 **Decisiones**
 
@@ -1051,11 +1051,11 @@ proveedor caído y sin claves en memoria. La consigna de la skill está en ingl�
 | Sin preferencia del usuario (o si Redis falla al leerla) rige `UMBRAL_MONTO_USD` | Claude | Una alerta con el límite por defecto vale más que ninguna |
 | WARN (y no INFO) con 0 receptores | Claude | Ahora la caché y la auditoría dependen de que alguien escuche |
 | Agregar `eventosActivos` a `/api/estadisticas` | Claude | Un contador que nadie puede leer no sirve; es un campo nuevo, no rompe a quien ya consumía la respuesta |
-| `maxWorkers: 2` en Jest | Claude | La suite entera se quedaba sin memoria en esta máquina |
+| `maxWorkers: 1` (en banda) en Jest | Claude | La suite se quedaba sin memoria en esta máquina; con 4 y con 2 procesos todavía fallaba a veces, en banda no falló en 6 corridas |
 
 **Verificación**
 - `npm run check`, `npm run build` y `npm test`: 39 suites, **496 tests** en verde (44 nuevos: suscriptor, proyecciones, notificaciones, regla de la alerta, duplicado de
-  Mongo, estadísticas y publicador). Cuatro corridas seguidas de la suite completa en verde.
+  Mongo, estadísticas y publicador). Con `maxWorkers: 1`, seis corridas seguidas de la suite completa en verde.
 - **Con Auth0 real y Docker (siete servicios sanos):** un alta, un cambio y una baja → 3 eventos con `receptores: 2`; el historial tiene `CREAR`, `ACTUALIZAR` y
   `ELIMINAR` escritos por el suscriptor; el `GET` posterior al `PUT` es `MISS` y trae el dato nuevo; la Whale Alert aparece en el log de notificaciones con el límite
   del usuario (10.000 USD); `/api/estadisticas` cuenta los eventos por tipo; el índice único parcial existe en Mongo.
@@ -1072,7 +1072,7 @@ proveedor caído y sin claves en memoria. La consigna de la skill está en ingl�
 
 **Hallazgos**
 - **Jest se quedaba sin memoria** (`worker ran out of memory`) con un proceso por núcleo (16) y Docker corriendo, en una máquina de 8 GB con unos 300 MB libres; con
-  `maxWorkers: 4` todavía falló una vez y con 2 pasó 4 corridas seguidas.
+  `maxWorkers: 4` y con 2 todavía falló alguna vez (también en la revisión); en banda (`maxWorkers: 1`, unos 8 s) pasó 6 corridas seguidas.
 - **Tres requests de Postman** (leer justo después de escribir) dependían de que la auditoría y la caché fueran inmediatas. Pasaron, pero por suerte: se agregó la espera.
 - Una vez, en mi guion del reto, el `POST` no devolvió un `id`; al repetir el escenario anduvo y no quedó rastro en los logs de la API. No se pudo atribuir a una causa; queda
   anotado como observación, no como defecto confirmado.
